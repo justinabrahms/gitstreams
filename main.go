@@ -39,12 +39,12 @@ type Config struct {
 	DBPath     string
 	Token      string
 	ReportPath string
+	Since      string // Generate report from this date (e.g., '2026-01-15' or '7d')
+	Days       int    // Number of days to look back for activity (default 30)
 	NoNotify   bool
 	NoOpen     bool
 	Verbose    bool
-	Days       int    // Number of days to look back for activity (default 30)
-	Since      string // Generate report from this date (e.g., '2026-01-15' or '7d')
-	Offline    bool   // Use only cached data, skip GitHub API calls
+	Offline    bool // Use only cached data, skip GitHub API calls
 }
 
 // Dependencies holds injectable dependencies for testing.
@@ -135,9 +135,9 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 
 	// Historical mode: generate report from cached data
 	if cfg.Since != "" {
-		sinceDate, err := parseSinceDate(cfg.Since, deps.Now())
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "Error parsing --since date: %v\n", err)
+		sinceDate, parseErr := parseSinceDate(cfg.Since, deps.Now())
+		if parseErr != nil {
+			_, _ = fmt.Fprintf(stderr, "Error parsing --since date: %v\n", parseErr)
 			return 1
 		}
 
@@ -164,9 +164,9 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 		// Get current snapshot: either from cache (offline) or from GitHub (live)
 		if cfg.Offline {
 			// Use most recent cached snapshot
-			recentSnapshots, err := store.GetByUser(snapshotUserID, 1)
-			if err != nil {
-				_, _ = fmt.Fprintf(stderr, "Error loading most recent snapshot: %v\n", err)
+			recentSnapshots, loadErr := store.GetByUser(snapshotUserID, 1)
+			if loadErr != nil {
+				_, _ = fmt.Fprintf(stderr, "Error loading most recent snapshot: %v\n", loadErr)
 				return 1
 			}
 			if len(recentSnapshots) == 0 {
@@ -343,9 +343,7 @@ func parseFlags(args []string) (*Config, error) {
 	}
 
 	// Validate since and offline flags
-	if cfg.Since != "" && !cfg.Offline {
-		// --since without --offline is allowed, but requires token for current data
-	}
+	// Note: --since without --offline is allowed, but requires token for current data
 	if cfg.Offline && cfg.Since == "" {
 		return nil, fmt.Errorf("--offline requires --since to specify the time range")
 	}
