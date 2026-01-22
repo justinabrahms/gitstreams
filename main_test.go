@@ -499,13 +499,60 @@ func TestConvertEvent(t *testing.T) {
 	}
 }
 
+func TestNoDuplicateRepoCreations(t *testing.T) {
+	// This test validates that we don't get duplicate "created repo" entries
+	// when both NewRepos and CreateEvent exist for the same repository.
+	now := time.Now()
+	result := &diff.Result{
+		OldCapturedAt: now.Add(-1 * time.Hour),
+		NewCapturedAt: now,
+		NewRepos: []diff.RepoChange{
+			{
+				Username: "testuser",
+				Repo: diff.Repo{
+					Owner:     "testuser",
+					Name:      "new-repo",
+					CreatedAt: now,
+				},
+			},
+		},
+		NewEvents: []diff.EventChange{
+			{
+				Username: "testuser",
+				Event: diff.Event{
+					Type:      "CreateEvent",
+					Repo:      "testuser/new-repo",
+					CreatedAt: now,
+				},
+			},
+		},
+	}
+
+	rpt := buildReport(result, now.Add(-1*time.Hour), now, now)
+
+	// Count ActivityCreatedRepo entries
+	createdRepoCount := 0
+	for _, ua := range rpt.UserActivities {
+		for _, a := range ua.Activities {
+			if a.Type == report.ActivityCreatedRepo {
+				createdRepoCount++
+			}
+		}
+	}
+
+	// Should only have 1 entry (from NewRepos), not 2 (NewRepos + CreateEvent)
+	if createdRepoCount != 1 {
+		t.Errorf("expected 1 ActivityCreatedRepo entry, got %d", createdRepoCount)
+	}
+}
+
 func TestEventTypeToActivityType(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected report.ActivityType
 	}{
 		{"WatchEvent", report.ActivityStarred},
-		{"CreateEvent", report.ActivityCreatedRepo},
+		{"CreateEvent", ""}, // CreateEvent is skipped to avoid duplicates with NewRepos
 		{"ForkEvent", report.ActivityForked},
 		{"PushEvent", report.ActivityPushed},
 		{"PullRequestEvent", report.ActivityPR},
