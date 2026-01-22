@@ -83,6 +83,22 @@ The generated report includes:
 - **Relative timestamps** — "2 hours ago", "yesterday", "last week"
 - **Fun taglines** — dynamic header message based on activity volume
 
+## OpenTelemetry Instrumentation (Optional)
+
+gitstreams includes optional OpenTelemetry instrumentation to monitor sync operation performance. Enable it by setting:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4318
+```
+
+See [OTEL_SETUP.md](OTEL_SETUP.md) for detailed setup instructions, including Docker Compose configuration for a local collector and Jaeger UI.
+
+Benefits:
+- Monitor sync operation duration
+- Track per-user API call timings
+- Analyze pagination patterns
+- Identify performance bottlenecks
+
 ## Development
 
 ### Git Hooks (Recommended)

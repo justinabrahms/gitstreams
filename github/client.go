@@ -13,6 +13,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const defaultBaseURL = "https://api.github.com"
@@ -297,6 +301,11 @@ func (c *Client) parseRateLimitHeaders(resp *http.Response) {
 // It handles GitHub's pagination by requesting 100 items per page until
 // no more results are returned.
 func (c *Client) getPaginated(ctx context.Context, basePath string, result any) error {
+	tracer := otel.Tracer("gitstreams")
+	ctx, span := tracer.Start(ctx, "github.getPaginated",
+		trace.WithAttributes(attribute.String("path", basePath)))
+	defer span.End()
+
 	// Use reflection to work with any slice type
 	resultVal := reflect.ValueOf(result)
 	if resultVal.Kind() != reflect.Ptr || resultVal.Elem().Kind() != reflect.Slice {
@@ -316,15 +325,27 @@ func (c *Client) getPaginated(ctx context.Context, basePath string, result any) 
 		}
 		path := fmt.Sprintf("%s%spage=%d&per_page=%d", basePath, separator, page, perPage)
 
+		// Create a span for this page
+		_, pageSpan := tracer.Start(ctx, "github.fetchPage",
+			trace.WithAttributes(
+				attribute.String("path", path),
+				attribute.Int("page", page)))
+
 		// Create a new slice to hold this page's results
 		pageResult := reflect.New(sliceVal.Type()).Interface()
 
 		if err := c.get(ctx, path, pageResult); err != nil {
+			pageSpan.RecordError(err)
+			pageSpan.End()
+			span.RecordError(err)
 			return err
 		}
 
 		// Get the slice value from the pointer
 		pageSlice := reflect.ValueOf(pageResult).Elem()
+
+		pageSpan.SetAttributes(attribute.Int("results", pageSlice.Len()))
+		pageSpan.End()
 
 		// If we got no results, we're done
 		if pageSlice.Len() == 0 {
@@ -344,6 +365,9 @@ func (c *Client) getPaginated(ctx context.Context, basePath string, result any) 
 
 	// Set the final result
 	resultVal.Elem().Set(sliceVal)
+	span.SetAttributes(
+		attribute.Int("total_pages", page),
+		attribute.Int("total_results", sliceVal.Len()))
 	return nil
 }
 
