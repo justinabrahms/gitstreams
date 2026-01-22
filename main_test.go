@@ -19,14 +19,14 @@ import (
 
 // mockGitHubClient implements GitHubClient for testing.
 type mockGitHubClient struct {
-	followedUsers []github.User
+	followedErr   error
 	starredRepos  map[string][]github.Repository
 	ownedRepos    map[string][]github.Repository
 	events        map[string][]github.Event
-	followedErr   error
 	starredErr    map[string]error
 	ownedErr      map[string]error
 	eventsErr     map[string]error
+	followedUsers []github.User
 }
 
 func (m *mockGitHubClient) GetFollowedUsers(ctx context.Context) ([]github.User, error) {
@@ -62,12 +62,12 @@ func (m *mockGitHubClient) GetRecentEvents(ctx context.Context, username string)
 
 // mockStore implements Store for testing.
 type mockStore struct {
-	snapshots     []*storage.Snapshot
-	savedCalled   bool
-	savedSnapshot *storage.Snapshot
-	closeCalled   bool
 	saveErr       error
 	getErr        error
+	savedSnapshot *storage.Snapshot
+	snapshots     []*storage.Snapshot
+	savedCalled   bool
+	closeCalled   bool
 }
 
 func (m *mockStore) Save(snapshot *storage.Snapshot) error {
@@ -334,11 +334,11 @@ func TestRun_StoreError(t *testing.T) {
 
 func TestParseFlags(t *testing.T) {
 	tests := []struct {
-		name     string
-		args     []string
-		envToken string
-		wantErr  bool
 		check    func(*testing.T, *Config)
+		name     string
+		envToken string
+		args     []string
+		wantErr  bool
 	}{
 		{
 			name:     "defaults with env token",

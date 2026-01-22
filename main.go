@@ -30,9 +30,9 @@ const (
 type Config struct {
 	DBPath     string
 	Token      string
+	ReportPath string
 	NoNotify   bool
 	NoOpen     bool
-	ReportPath string
 	Verbose    bool
 }
 
@@ -167,7 +167,7 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 		return 1
 	}
 
-	f, err := os.Create(reportPath)
+	f, err := os.Create(reportPath) // #nosec G304 -- reportPath is user-specified via flag or safe default
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "Error creating report file: %v\n", err)
 		return 1
@@ -235,7 +235,7 @@ func parseFlags(args []string) (*Config, error) {
 			return nil, fmt.Errorf("getting home directory: %w", err)
 		}
 		dataDir := filepath.Join(home, ".gitstreams")
-		if err := os.MkdirAll(dataDir, 0755); err != nil {
+		if err := os.MkdirAll(dataDir, 0750); err != nil {
 			return nil, fmt.Errorf("creating data directory: %w", err)
 		}
 		cfg.DBPath = filepath.Join(dataDir, defaultDBName)
@@ -524,5 +524,5 @@ func openBrowser(url string) error {
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 
-	return exec.Command(cmd, args...).Start()
+	return exec.Command(cmd, args...).Start() // #nosec G204 -- cmd/args are platform-specific constants, not user input
 }
