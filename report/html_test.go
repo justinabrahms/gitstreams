@@ -760,8 +760,8 @@ func TestAggregateActivities(t *testing.T) {
 	tests := []struct {
 		name       string
 		activities []Activity
-		wantLen    int
 		wantFirst  AggregatedActivity
+		wantLen    int
 	}{
 		{
 			name:       "empty activities",
@@ -876,18 +876,18 @@ func TestAggregateActivitiesTimeRange(t *testing.T) {
 func TestAggregatedVerb(t *testing.T) {
 	tests := []struct {
 		name     string
+		contains string
 		aType    ActivityType
 		count    int
-		contains string
 	}{
-		{"pushed single", ActivityPushed, 1, "pushed to"},
-		{"pushed multiple", ActivityPushed, 6, "pushed 6 times to"},
-		{"starred single", ActivityStarred, 1, "starred"},
-		{"starred multiple", ActivityStarred, 3, "starred 3 repos"},
-		{"PR single", ActivityPR, 1, "opened PR on"},
-		{"PR multiple", ActivityPR, 4, "opened 4 PRs on"},
-		{"created single", ActivityCreatedRepo, 1, "created"},
-		{"created multiple", ActivityCreatedRepo, 2, "created 2 repos"},
+		{"pushed single", "pushed to", ActivityPushed, 1},
+		{"pushed multiple", "pushed 6 times to", ActivityPushed, 6},
+		{"starred single", "starred", ActivityStarred, 1},
+		{"starred multiple", "starred 3 repos", ActivityStarred, 3},
+		{"PR single", "opened PR on", ActivityPR, 1},
+		{"PR multiple", "opened 4 PRs on", ActivityPR, 4},
+		{"created single", "created", ActivityCreatedRepo, 1},
+		{"created multiple", "created 2 repos", ActivityCreatedRepo, 2},
 	}
 
 	for _, tt := range tests {
@@ -910,11 +910,11 @@ func TestTimeRange(t *testing.T) {
 		contains string
 	}{
 		{"both zero", time.Time{}, time.Time{}, "unknown"},
-		{"first zero", time.Time{}, now, ""},                                    // Should use relativeTime for last
-		{"same time", now, now, ""},                                             // Should use relativeTime
-		{"less than 1 hour", now.Add(-30 * time.Minute), now, ""},               // Just relative time
-		{"2 hours span", now.Add(-2 * time.Hour), now, "over 2 hours"},          // Should show hour span
-		{"1 day span", now.Add(-25 * time.Hour), now, "over 1 day"},             // Should show day span
+		{"first zero", time.Time{}, now, ""},                                       // Should use relativeTime for last
+		{"same time", now, now, ""},                                                // Should use relativeTime
+		{"less than 1 hour", now.Add(-30 * time.Minute), now, ""},                  // Just relative time
+		{"2 hours span", now.Add(-2 * time.Hour), now, "over 2 hours"},             // Should show hour span
+		{"1 day span", now.Add(-25 * time.Hour), now, "over 1 day"},                // Should show day span
 		{"3 days span", now.Add(-3 * 24 * time.Hour), now, "over the last 3 days"}, // Should show days span
 	}
 

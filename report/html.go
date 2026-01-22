@@ -33,14 +33,14 @@ type Activity struct {
 
 // AggregatedActivity represents multiple similar activities grouped together.
 type AggregatedActivity struct {
-	Type      ActivityType
+	FirstTime time.Time
+	LastTime  time.Time
 	User      string
 	RepoName  string
 	RepoURL   string
-	FirstTime time.Time
-	LastTime  time.Time
-	Count     int
 	Details   string
+	Type      ActivityType
+	Count     int
 }
 
 // UserActivity groups activities by user.
@@ -958,14 +958,14 @@ type HTMLGenerator struct {
 // NewHTMLGenerator creates a new HTMLGenerator with the default template.
 func NewHTMLGenerator() (*HTMLGenerator, error) {
 	funcMap := template.FuncMap{
-		"icon":           activityIcon,
-		"verb":           activityVerb,
-		"aggVerb":        aggregatedVerb,
-		"isHot":          isHot,
-		"tagline":        tagline,
-		"categoryName":   categoryName,
-		"relTime":        relativeTime,
-		"timeRange":      timeRange,
+		"icon":         activityIcon,
+		"verb":         activityVerb,
+		"aggVerb":      aggregatedVerb,
+		"isHot":        isHot,
+		"tagline":      tagline,
+		"categoryName": categoryName,
+		"relTime":      relativeTime,
+		"timeRange":    timeRange,
 	}
 
 	tmpl, err := template.New("report").Funcs(funcMap).Parse(htmlTemplate)
