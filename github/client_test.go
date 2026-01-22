@@ -688,3 +688,230 @@ func TestGetStarredReposPagination(t *testing.T) {
 		t.Errorf("expected 2 requests, got %d", requestCount)
 	}
 }
+
+func TestGetRepository(t *testing.T) {
+	repo := Repository{
+		ID:          123,
+		Name:        "test-repo",
+		FullName:    "owner/test-repo",
+		Description: "A test repository",
+		Language:    "Go",
+		StarCount:   42,
+		Owner: User{
+			Login: "owner",
+			ID:    1,
+		},
+	}
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if r.URL.Path != "/repos/owner/test-repo" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(repo); err != nil {
+			t.Fatalf("encoding response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("test-token", WithBaseURL(server.URL))
+	result, err := c.GetRepository(context.Background(), "owner", "test-repo")
+	if err != nil {
+		t.Fatalf("GetRepository() error: %v", err)
+	}
+
+	if result.Name != "test-repo" {
+		t.Errorf("expected name 'test-repo', got %q", result.Name)
+	}
+	if result.Description != "A test repository" {
+		t.Errorf("expected description 'A test repository', got %q", result.Description)
+	}
+	if result.StarCount != 42 {
+		t.Errorf("expected star count 42, got %d", result.StarCount)
+	}
+	if requestCount != 1 {
+		t.Errorf("expected 1 request, got %d", requestCount)
+	}
+}
+
+func TestGetRepositoryCaching(t *testing.T) {
+	repo := Repository{
+		ID:          123,
+		Name:        "cached-repo",
+		FullName:    "owner/cached-repo",
+		Description: "Cached repository",
+		Owner: User{
+			Login: "owner",
+			ID:    1,
+		},
+	}
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(repo); err != nil {
+			t.Fatalf("encoding response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("test-token", WithBaseURL(server.URL))
+
+	// First request - should hit API
+	result1, err := c.GetRepository(context.Background(), "owner", "cached-repo")
+	if err != nil {
+		t.Fatalf("first GetRepository() error: %v", err)
+	}
+	if result1.Description != "Cached repository" {
+		t.Errorf("expected description 'Cached repository', got %q", result1.Description)
+	}
+	if requestCount != 1 {
+		t.Errorf("expected 1 request after first call, got %d", requestCount)
+	}
+
+	// Second request - should use cache
+	result2, err := c.GetRepository(context.Background(), "owner", "cached-repo")
+	if err != nil {
+		t.Fatalf("second GetRepository() error: %v", err)
+	}
+	if result2.Description != "Cached repository" {
+		t.Errorf("expected cached description 'Cached repository', got %q", result2.Description)
+	}
+	if requestCount != 1 {
+		t.Errorf("expected still 1 request after second call (cache hit), got %d", requestCount)
+	}
+}
+
+func TestCacheRepository(t *testing.T) {
+	repo := &Repository{
+		ID:          456,
+		Name:        "pre-cached-repo",
+		FullName:    "owner/pre-cached-repo",
+		Description: "Pre-cached repository",
+		Owner: User{
+			Login: "owner",
+			ID:    1,
+		},
+	}
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		t.Error("should not hit API for pre-cached repo")
+	}))
+	defer server.Close()
+
+	c := NewClient("test-token", WithBaseURL(server.URL))
+
+	// Pre-cache the repository
+	c.CacheRepository(repo)
+
+	// Request should use cache and not hit API
+	result, err := c.GetRepository(context.Background(), "owner", "pre-cached-repo")
+	if err != nil {
+		t.Fatalf("GetRepository() error: %v", err)
+	}
+	if result.Description != "Pre-cached repository" {
+		t.Errorf("expected cached description 'Pre-cached repository', got %q", result.Description)
+	}
+	if requestCount != 0 {
+		t.Errorf("expected 0 requests (cache hit), got %d", requestCount)
+	}
+}
+
+func TestClearRepoCache(t *testing.T) {
+	repo := Repository{
+		ID:          789,
+		Name:        "clear-test-repo",
+		FullName:    "owner/clear-test-repo",
+		Description: "Test clear cache",
+		Owner: User{
+			Login: "owner",
+			ID:    1,
+		},
+	}
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(repo); err != nil {
+			t.Fatalf("encoding response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("test-token", WithBaseURL(server.URL))
+
+	// First request
+	_, _ = c.GetRepository(context.Background(), "owner", "clear-test-repo")
+	// Second request (should use cache)
+	_, _ = c.GetRepository(context.Background(), "owner", "clear-test-repo")
+
+	if requestCount != 1 {
+		t.Errorf("expected 1 request before clear, got %d", requestCount)
+	}
+
+	// Clear repo cache
+	c.ClearRepoCache()
+
+	// Third request (should not use cache)
+	_, _ = c.GetRepository(context.Background(), "owner", "clear-test-repo")
+
+	if requestCount != 2 {
+		t.Errorf("expected 2 requests after clear, got %d", requestCount)
+	}
+}
+
+func TestGetStarredReposPopulatesCache(t *testing.T) {
+	repos := []Repository{
+		{ID: 1, Name: "repo1", FullName: "owner/repo1", Description: "First repo"},
+		{ID: 2, Name: "repo2", FullName: "owner/repo2", Description: "Second repo"},
+	}
+
+	starredRequestCount := 0
+	repoRequestCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user/starred" {
+			starredRequestCount++
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(repos); err != nil {
+				t.Fatalf("encoding response: %v", err)
+			}
+		} else if strings.HasPrefix(r.URL.Path, "/repos/") {
+			repoRequestCount++
+			t.Error("should not request individual repo when already cached from starred")
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("test-token", WithBaseURL(server.URL))
+
+	// Fetch starred repos (should populate cache)
+	_, err := c.GetStarredRepos(context.Background())
+	if err != nil {
+		t.Fatalf("GetStarredRepos() error: %v", err)
+	}
+
+	if starredRequestCount != 1 {
+		t.Errorf("expected 1 starred request, got %d", starredRequestCount)
+	}
+
+	// Now try to get one of those repos individually - should use cache
+	result, err := c.GetRepository(context.Background(), "owner", "repo1")
+	if err != nil {
+		t.Fatalf("GetRepository() error: %v", err)
+	}
+
+	if result.Description != "First repo" {
+		t.Errorf("expected description 'First repo', got %q", result.Description)
+	}
+
+	if repoRequestCount != 0 {
+		t.Errorf("expected 0 individual repo requests (should use cache), got %d", repoRequestCount)
+	}
+}
