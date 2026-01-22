@@ -38,6 +38,7 @@ gitstreams
 | `-db` | Path to SQLite database (default: `~/.gitstreams/gitstreams.db`) |
 | `-report` | Path to write HTML report (default: temp file) |
 | `-days` | Number of days to look back for activity (1-365, default: 30) |
+| `-offline` | Skip GitHub API sync and use cached data |
 | `-no-notify` | Skip desktop notification |
 | `-no-open` | Don't open report in browser |
 | `-v` | Verbose output |
@@ -53,6 +54,9 @@ gitstreams -v -db /path/to/my.db
 
 # Only show activity from the last 7 days
 gitstreams -days 7
+
+# Use cached data without hitting GitHub API (fast, but may be stale)
+gitstreams -offline
 ```
 
 ## HTML Report
