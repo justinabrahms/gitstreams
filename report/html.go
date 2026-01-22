@@ -25,6 +25,7 @@ const (
 type Activity struct {
 	Type      ActivityType
 	User      string
+	AvatarURL string
 	RepoName  string
 	RepoURL   string
 	Timestamp time.Time
@@ -36,6 +37,7 @@ type AggregatedActivity struct {
 	FirstTime time.Time
 	LastTime  time.Time
 	User      string
+	AvatarURL string
 	RepoName  string
 	RepoURL   string
 	Details   string
@@ -157,6 +159,7 @@ func aggregateActivities(activities []Activity) []AggregatedActivity {
 		result = append(result, AggregatedActivity{
 			Type:      first.Type,
 			User:      first.User,
+			AvatarURL: first.AvatarURL,
 			RepoName:  first.RepoName,
 			RepoURL:   first.RepoURL,
 			FirstTime: firstTime,
@@ -279,9 +282,10 @@ func (r *Report) GetStats() ActivityStats {
 
 // Highlight represents the most interesting activity to feature.
 type Highlight struct {
-	Activity Activity
-	User     string
-	Reason   string
+	Activity  Activity
+	User      string
+	AvatarURL string
+	Reason    string
 }
 
 // GetHighlight returns the most interesting activity to feature.
@@ -291,7 +295,7 @@ func (r *Report) GetHighlight() *Highlight {
 
 	for _, ua := range r.UserActivities {
 		for _, a := range ua.Activities {
-			candidate := &Highlight{Activity: a, User: ua.User}
+			candidate := &Highlight{Activity: a, User: ua.User, AvatarURL: ua.AvatarURL}
 
 			switch a.Type {
 			case ActivityCreatedRepo:
@@ -766,9 +770,23 @@ const htmlTemplate = `<!DOCTYPE html>
         .activity-icon {
             font-size: 1.2em;
         }
+        .activity-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
         .activity-user {
             font-weight: 500;
             color: #24292f;
+            display: flex;
+            align-items: center;
+        }
+        .highlight-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 12px;
         }
         .hot-badge {
             font-size: 0.8em;
@@ -862,6 +880,7 @@ const htmlTemplate = `<!DOCTYPE html>
     <div class="highlight">
         <div class="highlight-header">✨ Highlight of the Day</div>
         <div class="highlight-content">
+            {{if $highlight.AvatarURL}}<img src="{{$highlight.AvatarURL}}" alt="{{$highlight.User}}" class="highlight-avatar">{{end}}
             <span class="highlight-icon">{{icon $highlight.Activity.Type}}</span>
             <div class="highlight-text">
                 <strong>{{$highlight.User}}</strong> {{verb $highlight.Activity.Type}} <a href="{{$highlight.Activity.RepoURL}}">{{$highlight.Activity.RepoName}}</a>
@@ -892,7 +911,7 @@ const htmlTemplate = `<!DOCTYPE html>
                     <li class="activity-item{{if isHot .Type}} hot{{end}}">
                         <span class="activity-icon">{{icon .Type}}{{if isHot .Type}}<span class="hot-badge">🔥</span>{{end}}</span>
                         <div class="activity-content">
-                            <span class="activity-user">{{.User}}</span> {{aggVerb .Type .Count}} <a href="{{.RepoURL}}">{{.RepoName}}</a>
+                            <span class="activity-user">{{if .AvatarURL}}<img src="{{.AvatarURL}}" alt="{{.User}}" class="activity-avatar">{{end}}{{.User}}</span> {{aggVerb .Type .Count}} <a href="{{.RepoURL}}">{{.RepoName}}</a>
                             <div class="activity-time">{{timeRange .FirstTime .LastTime}}</div>
                             {{if .Details}}<div class="activity-details">{{.Details}}</div>{{end}}
                         </div>
