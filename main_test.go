@@ -1234,7 +1234,7 @@ func TestRun_HistoricalMode(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"-since", "7d", "-token", "test-token", "-no-notify", "-no-open", "-v"}
+	args := []string{"-report-since", "7d", "-token", "test-token", "-no-notify", "-no-open", "-v"}
 
 	exitCode := run(&stdout, &stderr, args, deps)
 
@@ -1307,7 +1307,7 @@ func TestRun_OfflineMode(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"-since", "7d", "-offline", "-no-notify", "-no-open", "-v"}
+	args := []string{"-report-since", "7d", "-offline", "-no-notify", "-no-open", "-v"}
 
 	exitCode := run(&stdout, &stderr, args, deps)
 
@@ -1325,9 +1325,9 @@ func TestRun_OfflineMode(t *testing.T) {
 	}
 }
 
-// TestRun_OfflineWithoutSince - --offline can be used standalone or with --since
+// TestRun_OfflineWithoutSince - --offline can be used standalone or with --report-since
 // Standalone --offline mode uses cached data for a quick report without GitHub API calls
-// This test is removed as --offline is now supported both with and without --since
+// This test is removed as --offline is now supported both with and without --report-since
 
 func TestRun_BrowserError_DoesNotFail(t *testing.T) {
 	var stdout, stderr bytes.Buffer
