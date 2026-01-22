@@ -12,6 +12,7 @@ type Notification struct {
 	Message  string
 	Subtitle string
 	Sound    string // macOS sound name (e.g., "default", "Ping", "Basso")
+	OpenURL  string // URL to open when notification is clicked (terminal-notifier only)
 }
 
 // Notifier sends desktop notifications.
@@ -77,13 +78,19 @@ func (m *MacNotifier) sendTerminalNotifier(n Notification) error {
 	if n.Sound != "" {
 		args = append(args, "-sound", n.Sound)
 	}
+	if n.OpenURL != "" {
+		args = append(args, "-open", n.OpenURL)
+	}
 
 	return m.Executor.Run("terminal-notifier", args...)
 }
 
 // sendOsascript sends a notification using osascript.
+// Note: osascript's display notification does not support click actions.
+// For click-to-open functionality, install terminal-notifier: brew install terminal-notifier
 func (m *MacNotifier) sendOsascript(n Notification) error {
 	// Build AppleScript for display notification
+	// OpenURL is intentionally ignored as osascript does not support click actions
 	script := fmt.Sprintf(`display notification %q`, n.Message)
 
 	if n.Title != "" {

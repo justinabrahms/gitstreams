@@ -323,6 +323,7 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 			Message:  formatNotificationMessage(result),
 			Subtitle: "Activity from people you follow",
 			Sound:    "default",
+			OpenURL:  "file://" + reportPath,
 		}
 		if err := notifier.Send(n); err != nil {
 			_, _ = fmt.Fprintf(stderr, "Warning: could not send notification: %v\n", err)
