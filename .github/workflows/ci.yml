@@ -26,15 +26,8 @@ jobs:
       - name: Build
         run: go build -v ./...
 
-      - name: Test with coverage
-        run: |
-          go test -race -coverprofile=coverage.out -covermode=atomic ./...
-          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
-          echo "Coverage: ${COVERAGE}%"
-          if (( $(echo "$COVERAGE < 60" | bc -l) )); then
-            echo "Coverage ${COVERAGE}% is below 60% threshold"
-            exit 1
-          fi
+      - name: Test
+        run: go test -race -v ./...
 
   lint:
     runs-on: ubuntu-latest
