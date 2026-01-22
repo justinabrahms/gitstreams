@@ -1133,3 +1133,157 @@ func TestRun_BrowserError_DoesNotFail(t *testing.T) {
 		t.Errorf("expected warning about browser, got: %s", stderr.String())
 	}
 }
+
+func TestRun_OfflineMode_WithCachedData(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	// Create a cached snapshot
+	cachedSnapshot := diff.NewSnapshot(fixedTime().Add(-24 * time.Hour))
+	cachedSnapshot.Users["testuser"] = diff.UserActivity{
+		Username: "testuser",
+		StarredRepos: []diff.Repo{
+			{Owner: "owner1", Name: "cached-repo", Description: "A cached repo"},
+		},
+	}
+
+	ss, _ := snapshotToStorage(cachedSnapshot)
+	mockStoreInst := &mockStore{
+		snapshots: []*storage.Snapshot{ss},
+	}
+
+	mockGenInst := &mockReportGenerator{}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient {
+			t.Error("GitHubClient should not be created in offline mode")
+			return nil
+		},
+		StoreFactory:    func(dbPath string) (Store, error) { return mockStoreInst, nil },
+		NotifierFactory: func() Notifier { return &mockNotifier{} },
+		ReportGenerator: func() (ReportGenerator, error) { return mockGenInst, nil },
+		OpenBrowser:     func(url string) error { return nil },
+		Now:             fixedTime,
+	}
+
+	result := run(&stdout, &stderr, []string{
+		"-offline",
+		"-db", filepath.Join(tmpDir, "test.db"),
+		"-report", filepath.Join(tmpDir, "report.html"),
+		"-no-notify",
+		"-no-open",
+	}, deps)
+
+	if result != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", result, stderr.String())
+	}
+
+	// Check that we got a warning about cached data
+	if !strings.Contains(stdout.String(), "Using cached data") {
+		t.Errorf("expected 'Using cached data' message, got: %s", stdout.String())
+	}
+
+	if !strings.Contains(stdout.String(), "may be stale") {
+		t.Errorf("expected 'may be stale' warning, got: %s", stdout.String())
+	}
+
+	// Verify that the snapshot was NOT saved (offline mode should not save)
+	if mockStoreInst.savedCalled {
+		t.Error("expected snapshot not to be saved in offline mode")
+	}
+
+	// Verify report was generated
+	if mockGenInst.generatedReport == nil {
+		t.Error("expected report to be generated")
+	}
+}
+
+func TestRun_OfflineMode_NoCachedData(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	mockStoreInst := &mockStore{
+		snapshots: []*storage.Snapshot{}, // No cached data
+	}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient {
+			t.Error("GitHubClient should not be created in offline mode")
+			return nil
+		},
+		StoreFactory:    func(dbPath string) (Store, error) { return mockStoreInst, nil },
+		NotifierFactory: func() Notifier { return &mockNotifier{} },
+		ReportGenerator: func() (ReportGenerator, error) { return &mockReportGenerator{}, nil },
+		OpenBrowser:     func(url string) error { return nil },
+		Now:             fixedTime,
+	}
+
+	result := run(&stdout, &stderr, []string{
+		"-offline",
+		"-db", filepath.Join(tmpDir, "test.db"),
+	}, deps)
+
+	if result != 1 {
+		t.Errorf("expected exit code 1, got %d", result)
+	}
+
+	// Check that we got an error about missing cached data
+	if !strings.Contains(stderr.String(), "No cached data available") {
+		t.Errorf("expected error about no cached data, got: %s", stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), "Run without --offline first") {
+		t.Errorf("expected suggestion to run without --offline, got: %s", stderr.String())
+	}
+}
+
+func TestRun_OfflineMode_NoTokenRequired(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	// Create a cached snapshot
+	cachedSnapshot := diff.NewSnapshot(fixedTime().Add(-24 * time.Hour))
+	cachedSnapshot.Users["testuser"] = diff.UserActivity{
+		Username: "testuser",
+		StarredRepos: []diff.Repo{
+			{Owner: "owner1", Name: "cached-repo"},
+		},
+	}
+
+	ss, _ := snapshotToStorage(cachedSnapshot)
+	mockStoreInst := &mockStore{
+		snapshots: []*storage.Snapshot{ss},
+	}
+
+	mockGenInst := &mockReportGenerator{}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient {
+			t.Error("GitHubClient should not be created in offline mode")
+			return nil
+		},
+		StoreFactory:    func(dbPath string) (Store, error) { return mockStoreInst, nil },
+		NotifierFactory: func() Notifier { return &mockNotifier{} },
+		ReportGenerator: func() (ReportGenerator, error) { return mockGenInst, nil },
+		OpenBrowser:     func(url string) error { return nil },
+		Now:             fixedTime,
+	}
+
+	// Run without -token flag and without GITHUB_TOKEN env var
+	result := run(&stdout, &stderr, []string{
+		"-offline",
+		"-db", filepath.Join(tmpDir, "test.db"),
+		"-report", filepath.Join(tmpDir, "report.html"),
+		"-no-notify",
+		"-no-open",
+	}, deps)
+
+	if result != 0 {
+		t.Errorf("expected exit code 0 in offline mode without token, got %d. stderr: %s", result, stderr.String())
+	}
+
+	// Should not have error about missing token
+	if strings.Contains(stderr.String(), "GITHUB_TOKEN") {
+		t.Errorf("should not require GITHUB_TOKEN in offline mode, got: %s", stderr.String())
+	}
+}
