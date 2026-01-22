@@ -442,11 +442,11 @@ func TestGetHighlight(t *testing.T) {
 	now := time.Now()
 
 	tests := []struct {
-		name     string
 		report   *Report
-		wantNil  bool
+		name     string
 		wantType ActivityType
 		wantUser string
+		wantNil  bool
 	}{
 		{
 			name:    "empty report",
@@ -589,14 +589,14 @@ func TestIsHotActivity(t *testing.T) {
 
 func TestTagline(t *testing.T) {
 	tests := []struct {
-		count    int
 		contains string
+		count    int
 	}{
-		{0, "calm"},
-		{2, "quiet"},
-		{5, "busy"},
-		{15, "action"},
-		{50, "FIRE"},
+		{"calm", 0},
+		{"quiet", 2},
+		{"busy", 5},
+		{"action", 15},
+		{"FIRE", 50},
 	}
 
 	for _, tt := range tests {
