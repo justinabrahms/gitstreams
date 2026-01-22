@@ -320,6 +320,86 @@ func TestCategoryName(t *testing.T) {
 	}
 }
 
+func TestRelativeTime(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name     string
+		input    time.Time
+		expected string
+	}{
+		{
+			name:     "zero time",
+			input:    time.Time{},
+			expected: "unknown time",
+		},
+		{
+			name:     "just now (30 seconds ago)",
+			input:    now.Add(-30 * time.Second),
+			expected: "just now",
+		},
+		{
+			name:     "1 minute ago",
+			input:    now.Add(-1 * time.Minute),
+			expected: "1 minute ago",
+		},
+		{
+			name:     "5 minutes ago",
+			input:    now.Add(-5 * time.Minute),
+			expected: "5 minutes ago",
+		},
+		{
+			name:     "1 hour ago",
+			input:    now.Add(-1 * time.Hour),
+			expected: "1 hour ago",
+		},
+		{
+			name:     "3 hours ago",
+			input:    now.Add(-3 * time.Hour),
+			expected: "3 hours ago",
+		},
+		{
+			name:     "yesterday",
+			input:    now.Add(-25 * time.Hour),
+			expected: "yesterday",
+		},
+		{
+			name:     "3 days ago",
+			input:    now.Add(-3 * 24 * time.Hour),
+			expected: "3 days ago",
+		},
+		{
+			name:     "last week",
+			input:    now.Add(-10 * 24 * time.Hour),
+			expected: "last week",
+		},
+		{
+			name:     "3 weeks ago",
+			input:    now.Add(-21 * 24 * time.Hour),
+			expected: "3 weeks ago",
+		},
+		{
+			name:     "last month",
+			input:    now.Add(-45 * 24 * time.Hour),
+			expected: "last month",
+		},
+		{
+			name:     "3 months ago",
+			input:    now.Add(-90 * 24 * time.Hour),
+			expected: "3 months ago",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := relativeTime(tt.input)
+			if got != tt.expected {
+				t.Errorf("relativeTime() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestReportActivitiesByCategory(t *testing.T) {
 	now := time.Now()
 	report := &Report{
@@ -439,5 +519,16 @@ func TestHTMLGeneratorGenerateCategoryView(t *testing.T) {
 				t.Errorf("HTML should contain %q", check.contains)
 			}
 		})
+	}
+}
+
+func TestRelativeTimeOldDates(t *testing.T) {
+	// Test dates more than a year old - should show absolute date
+	oldDate := time.Date(2020, 6, 15, 10, 30, 0, 0, time.UTC)
+	got := relativeTime(oldDate)
+
+	// Should contain the year
+	if !strings.Contains(got, "2020") {
+		t.Errorf("relativeTime() for old date should show year, got %q", got)
 	}
 }

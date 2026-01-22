@@ -2,6 +2,7 @@
 package report
 
 import (
+	"fmt"
 	"html/template"
 	"io"
 	"time"
@@ -150,6 +151,56 @@ func activityVerb(t ActivityType) string {
 		return "opened issue on"
 	default:
 		return "acted on"
+	}
+}
+
+// relativeTime formats a timestamp as a human-readable relative time string.
+// Examples: "just now", "2 hours ago", "yesterday", "3 days ago"
+func relativeTime(t time.Time) string {
+	if t.IsZero() {
+		return "unknown time"
+	}
+
+	now := time.Now()
+	diff := now.Sub(t)
+
+	// Handle future times (shouldn't happen but be safe)
+	if diff < 0 {
+		return t.Format("Jan 2 at 3:04 PM")
+	}
+
+	seconds := int64(diff.Seconds())
+	minutes := int64(diff.Minutes())
+	hours := int64(diff.Hours())
+	days := hours / 24
+
+	switch {
+	case seconds < 60:
+		return "just now"
+	case minutes == 1:
+		return "1 minute ago"
+	case minutes < 60:
+		return fmt.Sprintf("%d minutes ago", minutes)
+	case hours == 1:
+		return "1 hour ago"
+	case hours < 24:
+		return fmt.Sprintf("%d hours ago", hours)
+	case days == 1:
+		return "yesterday"
+	case days < 7:
+		return fmt.Sprintf("%d days ago", days)
+	case days < 14:
+		return "last week"
+	case days < 30:
+		weeks := days / 7
+		return fmt.Sprintf("%d weeks ago", weeks)
+	case days < 60:
+		return "last month"
+	case days < 365:
+		months := days / 30
+		return fmt.Sprintf("%d months ago", months)
+	default:
+		return t.Format("Jan 2, 2006")
 	}
 }
 
@@ -431,7 +482,7 @@ const htmlTemplate = `<!DOCTYPE html>
                     <li class="activity-item">
                         <div class="activity-content">
                             <span class="activity-user">{{.User}}</span> {{verb .Type}} <a href="{{.RepoURL}}">{{.RepoName}}</a>
-                            <div class="activity-time">{{.Timestamp.Format "Jan 2 at 3:04 PM"}}</div>
+                            <div class="activity-time">{{relTime .Timestamp}}</div>
                             {{if .Details}}<div class="activity-details">{{.Details}}</div>{{end}}
                         </div>
                     </li>
@@ -457,7 +508,7 @@ const htmlTemplate = `<!DOCTYPE html>
                         <span class="activity-icon">{{icon .Type}}</span>
                         <div class="activity-content">
                             <span>{{verb .Type}} <a href="{{.RepoURL}}">{{.RepoName}}</a></span>
-                            <div class="activity-time">{{.Timestamp.Format "Jan 2 at 3:04 PM"}}</div>
+                            <div class="activity-time">{{relTime .Timestamp}}</div>
                             {{if .Details}}<div class="activity-details">{{.Details}}</div>{{end}}
                         </div>
                     </li>
@@ -497,6 +548,7 @@ func NewHTMLGenerator() (*HTMLGenerator, error) {
 		"icon":         activityIcon,
 		"verb":         activityVerb,
 		"categoryName": categoryName,
+		"relTime":      relativeTime,
 	}
 
 	tmpl, err := template.New("report").Funcs(funcMap).Parse(htmlTemplate)
