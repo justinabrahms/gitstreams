@@ -39,11 +39,12 @@ type Config struct {
 	DBPath     string
 	Token      string
 	ReportPath string
-	Days       int // Number of days to look back for activity (default 30)
+	Since      string // Generate report from this date (e.g., '2026-01-15' or '7d')
+	Days       int    // Number of days to look back for activity (default 30)
 	NoNotify   bool
 	NoOpen     bool
 	Verbose    bool
-	Offline    bool // Skip GitHub API sync and use cached data
+	Offline    bool // Use only cached data, skip GitHub API calls
 }
 
 // Dependencies holds injectable dependencies for testing.
@@ -68,6 +69,7 @@ type GitHubClient interface {
 type Store interface {
 	Save(snapshot *storage.Snapshot) error
 	GetByUser(userID string, limit int) ([]*storage.Snapshot, error)
+	GetByTimeRange(userID string, start, end time.Time) ([]*storage.Snapshot, error)
 	Close() error
 }
 
@@ -121,15 +123,7 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 		return 1
 	}
 
-	// Token is only required when not in offline mode
-	if !cfg.Offline && cfg.Token == "" {
-		_, _ = fmt.Fprintln(stderr, "Error: GITHUB_TOKEN environment variable is required")
-		return 1
-	}
-
-	ctx := context.Background()
-
-	// Open storage
+	// Open storage first to support both live and historical modes
 	store, err := deps.StoreFactory(cfg.DBPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "Error opening database: %v\n", err)
@@ -137,15 +131,84 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	var currentSnapshot *diff.Snapshot
-	var previousSnapshot *diff.Snapshot
+	var currentSnapshot, previousSnapshot *diff.Snapshot
 
-	// Fetch current activity from GitHub or load from cache
-	if cfg.Offline {
-		// Load most recent snapshot from storage
-		snapshots, loadErr := store.GetByUser(snapshotUserID, 1)
-		if loadErr != nil {
-			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", loadErr)
+	// Historical mode: generate report from cached data
+	if cfg.Since != "" {
+		var sinceDate time.Time
+		sinceDate, err = parseSinceDate(cfg.Since, deps.Now())
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error parsing --since date: %v\n", err)
+			return 1
+		}
+
+		if cfg.Verbose {
+			_, _ = fmt.Fprintf(stdout, "Historical mode: comparing data from %s to present\n", sinceDate.Format("2006-01-02"))
+		}
+
+		// Get snapshot from the "since" date
+		var sinceSnapshots []*storage.Snapshot
+		sinceSnapshots, err = store.GetByTimeRange(snapshotUserID, sinceDate.Add(-24*time.Hour), sinceDate.Add(24*time.Hour))
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error querying snapshots for --since date: %v\n", err)
+			return 1
+		}
+		if len(sinceSnapshots) == 0 {
+			_, _ = fmt.Fprintf(stderr, "No cached snapshot found for date %s (try running without --since first to build cache)\n", sinceDate.Format("2006-01-02"))
+			return 1
+		}
+		previousSnapshot, err = storageToSnapshot(sinceSnapshots[0])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading historical snapshot: %v\n", err)
+			return 1
+		}
+
+		// Get current snapshot: either from cache (offline) or from GitHub (live)
+		if cfg.Offline {
+			// Use most recent cached snapshot
+			var recentSnapshots []*storage.Snapshot
+			recentSnapshots, err = store.GetByUser(snapshotUserID, 1)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "Error loading most recent snapshot: %v\n", err)
+				return 1
+			}
+			if len(recentSnapshots) == 0 {
+				_, _ = fmt.Fprintf(stderr, "No cached snapshots available (run without --offline first)\n")
+				return 1
+			}
+			currentSnapshot, err = storageToSnapshot(recentSnapshots[0])
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "Error loading current snapshot: %v\n", err)
+				return 1
+			}
+			if cfg.Verbose {
+				_, _ = fmt.Fprintf(stdout, "Using cached snapshot from %s\n", currentSnapshot.CapturedAt.Format("2006-01-02"))
+			}
+		} else {
+			// Fetch fresh data from GitHub
+			if cfg.Token == "" {
+				_, _ = fmt.Fprintln(stderr, "Error: GITHUB_TOKEN environment variable is required (or use --offline)")
+				return 1
+			}
+			ctx := context.Background()
+			client := deps.GitHubClientFactory(cfg.Token)
+			cutoff := deps.Now().AddDate(0, 0, -cfg.Days)
+			currentSnapshot, err = fetchActivity(ctx, client, deps.Now(), cutoff, stdout, stderr, cfg.Verbose)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "Error fetching activity: %v\n", err)
+				return 1
+			}
+			if cfg.Verbose {
+				_, _ = fmt.Fprintf(stdout, "Fetched activity for %d users\n", len(currentSnapshot.Users))
+			}
+			// Don't save in historical mode
+		}
+	} else if cfg.Offline {
+		// Standalone offline mode: use cached data without historical comparison
+		var snapshots []*storage.Snapshot
+		snapshots, err = store.GetByUser(snapshotUserID, 1)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", err)
 			return 1
 		}
 
@@ -154,9 +217,9 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 			return 1
 		}
 
-		currentSnapshot, loadErr = storageToSnapshot(snapshots[0])
-		if loadErr != nil {
-			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", loadErr)
+		currentSnapshot, err = storageToSnapshot(snapshots[0])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", err)
 			return 1
 		}
 
@@ -166,10 +229,16 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 			_, _ = fmt.Fprintf(stdout, "Loaded cached activity for %d users\n", len(currentSnapshot.Users))
 		}
 
-		// In offline mode, use an empty snapshot as "previous" so the report shows all activities in the cached snapshot
+		// In standalone offline mode, use an empty snapshot as "previous" so the report shows all activities in the cached snapshot
 		previousSnapshot = diff.NewSnapshot(time.Time{})
 	} else {
-		// Fetch current activity from GitHub
+		// Normal mode: fetch current data and compare with most recent snapshot
+		if cfg.Token == "" {
+			_, _ = fmt.Fprintln(stderr, "Error: GITHUB_TOKEN environment variable is required")
+			return 1
+		}
+
+		ctx := context.Background()
 		client := deps.GitHubClientFactory(cfg.Token)
 		cutoff := deps.Now().AddDate(0, 0, -cfg.Days)
 		currentSnapshot, err = fetchActivity(ctx, client, deps.Now(), cutoff, stdout, stderr, cfg.Verbose)
@@ -182,7 +251,6 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 			_, _ = fmt.Fprintf(stdout, "Fetched activity for %d users\n", len(currentSnapshot.Users))
 		}
 
-		// Load previous snapshot
 		previousSnapshot, err = loadPreviousSnapshot(store)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "Error loading previous snapshot: %v\n", err)
@@ -289,7 +357,8 @@ func parseFlags(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.Verbose, "v", false, "Verbose output")
 	fs.BoolVar(&showVersion, "version", false, "Print version and exit")
 	fs.IntVar(&cfg.Days, "days", 30, "Number of days to look back for activity (1-365)")
-	fs.BoolVar(&cfg.Offline, "offline", false, "Skip GitHub API sync and use cached data")
+	fs.StringVar(&cfg.Since, "since", "", "Generate report from historical data (e.g., '2026-01-15' or '7d' for 7 days ago)")
+	fs.BoolVar(&cfg.Offline, "offline", false, "Use only cached data, skip GitHub API calls")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -303,6 +372,10 @@ func parseFlags(args []string) (*Config, error) {
 	if cfg.Days < 1 || cfg.Days > 365 {
 		return nil, fmt.Errorf("days must be between 1 and 365, got %d", cfg.Days)
 	}
+
+	// Validate since and offline flags
+	// Note: --since without --offline is allowed, but requires token for current data
+	// Note: --offline without --since is allowed for standalone cached mode
 
 	// Default token from environment
 	if cfg.Token == "" {
@@ -323,6 +396,53 @@ func parseFlags(args []string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseSinceDate parses a date string in various formats:
+// - Absolute: '2026-01-15', '2026-01-15T10:30:00Z'
+// - Relative: '7d' (7 days ago), '2w' (2 weeks ago), '3m' (3 months ago)
+func parseSinceDate(dateStr string, now time.Time) (time.Time, error) {
+	if dateStr == "" {
+		return time.Time{}, fmt.Errorf("date string is empty")
+	}
+
+	// Try parsing as relative time (e.g., '7d', '2w', '3m')
+	if len(dateStr) >= 2 {
+		unit := dateStr[len(dateStr)-1]
+		valueStr := dateStr[:len(dateStr)-1]
+
+		// Parse the numeric value
+		var value int
+		if _, err := fmt.Sscanf(valueStr, "%d", &value); err == nil && value > 0 {
+			switch unit {
+			case 'd':
+				return now.AddDate(0, 0, -value), nil
+			case 'w':
+				return now.AddDate(0, 0, -value*7), nil
+			case 'm':
+				return now.AddDate(0, -value, 0), nil
+			case 'y':
+				return now.AddDate(-value, 0, 0), nil
+			}
+		}
+	}
+
+	// Try parsing as absolute date in various formats
+	formats := []string{
+		time.RFC3339,
+		"2006-01-02",
+		"2006-01-02T15:04:05",
+		"2006/01/02",
+		"01/02/2006",
+	}
+
+	for _, format := range formats {
+		if t, err := time.Parse(format, dateStr); err == nil {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("unable to parse date %q (try formats like '2026-01-15' or '7d')", dateStr)
 }
 
 func fetchActivity(ctx context.Context, client GitHubClient, now, cutoff time.Time, w, progressW io.Writer, verbose bool) (*diff.Snapshot, error) {
