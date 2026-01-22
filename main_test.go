@@ -84,6 +84,20 @@ func (m *mockStore) GetByUser(userID string, limit int) ([]*storage.Snapshot, er
 	return m.snapshots, nil
 }
 
+func (m *mockStore) GetByTimeRange(userID string, start, end time.Time) ([]*storage.Snapshot, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	// For testing, return snapshots that fall within the time range
+	var filtered []*storage.Snapshot
+	for _, s := range m.snapshots {
+		if !s.Timestamp.Before(start) && !s.Timestamp.After(end) {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered, nil
+}
+
 func (m *mockStore) Close() error {
 	m.closeCalled = true
 	return nil
@@ -1091,6 +1105,240 @@ func TestRun_NotificationError_DoesNotFail(t *testing.T) {
 
 	if !strings.Contains(stderr.String(), "could not send notification") {
 		t.Errorf("expected warning about notification, got: %s", stderr.String())
+	}
+}
+
+func TestParseSinceDate(t *testing.T) {
+	now := time.Date(2026, 1, 22, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		input    string
+		expected time.Time
+		wantErr  bool
+	}{
+		{
+			name:     "relative days",
+			input:    "7d",
+			expected: time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC),
+			wantErr:  false,
+		},
+		{
+			name:     "relative weeks",
+			input:    "2w",
+			expected: time.Date(2026, 1, 8, 12, 0, 0, 0, time.UTC),
+			wantErr:  false,
+		},
+		{
+			name:     "relative months",
+			input:    "1m",
+			expected: time.Date(2025, 12, 22, 12, 0, 0, 0, time.UTC),
+			wantErr:  false,
+		},
+		{
+			name:     "absolute date",
+			input:    "2026-01-15",
+			expected: time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+			wantErr:  false,
+		},
+		{
+			name:     "absolute date with slashes",
+			input:    "2026/01/15",
+			expected: time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+			wantErr:  false,
+		},
+		{
+			name:    "invalid format",
+			input:   "invalid",
+			wantErr: true,
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseSinceDate(tt.input, now)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error but got none")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if !result.Equal(tt.expected) {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestRun_HistoricalMode(t *testing.T) {
+	now := time.Date(2026, 1, 22, 12, 0, 0, 0, time.UTC)
+	sevenDaysAgo := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	// Create historical snapshot
+	oldActivity := diff.UserActivity{
+		Username: "alice",
+		StarredRepos: []diff.Repo{
+			{Name: "old-repo", Owner: "alice", CreatedAt: sevenDaysAgo},
+		},
+	}
+	oldSnapshot := &diff.Snapshot{
+		CapturedAt: sevenDaysAgo,
+		Users:      map[string]diff.UserActivity{"alice": oldActivity},
+	}
+
+	// Create current snapshot
+	newActivity := diff.UserActivity{
+		Username: "alice",
+		StarredRepos: []diff.Repo{
+			{Name: "old-repo", Owner: "alice", CreatedAt: sevenDaysAgo},
+			{Name: "new-repo", Owner: "alice", CreatedAt: now},
+		},
+	}
+	newSnapshot := &diff.Snapshot{
+		CapturedAt: now,
+		Users:      map[string]diff.UserActivity{"alice": newActivity},
+	}
+
+	// Convert to storage format
+	oldSS, _ := snapshotToStorage(oldSnapshot)
+	newSS, _ := snapshotToStorage(newSnapshot)
+
+	mockStoreInst := &mockStore{
+		snapshots: []*storage.Snapshot{oldSS, newSS},
+	}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient {
+			return &mockGitHubClient{}
+		},
+		StoreFactory: func(dbPath string) (Store, error) {
+			return mockStoreInst, nil
+		},
+		NotifierFactory: func() Notifier {
+			return &mockNotifier{}
+		},
+		ReportGenerator: func() (ReportGenerator, error) {
+			return &mockReportGenerator{}, nil
+		},
+		OpenBrowser: func(url string) error { return nil },
+		Now:         func() time.Time { return now },
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"-since", "7d", "-token", "test-token", "-no-notify", "-no-open", "-v"}
+
+	exitCode := run(&stdout, &stderr, args, deps)
+
+	if exitCode != 0 {
+		t.Errorf("expected exit code 0, got %d", exitCode)
+		t.Logf("stderr: %s", stderr.String())
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Historical mode") {
+		t.Errorf("expected 'Historical mode' in output, got: %s", output)
+	}
+}
+
+func TestRun_OfflineMode(t *testing.T) {
+	now := time.Date(2026, 1, 22, 12, 0, 0, 0, time.UTC)
+	sevenDaysAgo := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	// Create historical snapshot
+	oldActivity := diff.UserActivity{
+		Username: "alice",
+		StarredRepos: []diff.Repo{
+			{Name: "old-repo", Owner: "alice", CreatedAt: sevenDaysAgo},
+		},
+	}
+	oldSnapshot := &diff.Snapshot{
+		CapturedAt: sevenDaysAgo,
+		Users:      map[string]diff.UserActivity{"alice": oldActivity},
+	}
+
+	// Create current snapshot (most recent cached)
+	newActivity := diff.UserActivity{
+		Username: "alice",
+		StarredRepos: []diff.Repo{
+			{Name: "old-repo", Owner: "alice", CreatedAt: sevenDaysAgo},
+			{Name: "new-repo", Owner: "alice", CreatedAt: now},
+		},
+	}
+	newSnapshot := &diff.Snapshot{
+		CapturedAt: now,
+		Users:      map[string]diff.UserActivity{"alice": newActivity},
+	}
+
+	// Convert to storage format
+	oldSS, _ := snapshotToStorage(oldSnapshot)
+	oldSS.Timestamp = sevenDaysAgo
+	newSS, _ := snapshotToStorage(newSnapshot)
+	newSS.Timestamp = now
+
+	mockStoreInst := &mockStore{
+		snapshots: []*storage.Snapshot{newSS, oldSS}, // Most recent first
+	}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient {
+			t.Error("should not call GitHub API in offline mode")
+			return &mockGitHubClient{}
+		},
+		StoreFactory: func(dbPath string) (Store, error) {
+			return mockStoreInst, nil
+		},
+		NotifierFactory: func() Notifier {
+			return &mockNotifier{}
+		},
+		ReportGenerator: func() (ReportGenerator, error) {
+			return &mockReportGenerator{}, nil
+		},
+		OpenBrowser: func(url string) error { return nil },
+		Now:         func() time.Time { return now },
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"-since", "7d", "-offline", "-no-notify", "-no-open", "-v"}
+
+	exitCode := run(&stdout, &stderr, args, deps)
+
+	if exitCode != 0 {
+		t.Errorf("expected exit code 0, got %d", exitCode)
+		t.Logf("stderr: %s", stderr.String())
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Historical mode") {
+		t.Errorf("expected 'Historical mode' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "Using cached snapshot") {
+		t.Errorf("expected 'Using cached snapshot' in output, got: %s", output)
+	}
+}
+
+func TestRun_OfflineWithoutSince_Fails(t *testing.T) {
+	deps := DefaultDependencies()
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"-offline"}
+
+	exitCode := run(&stdout, &stderr, args, deps)
+
+	if exitCode == 0 {
+		t.Error("expected non-zero exit code when using --offline without --since")
+	}
+
+	if !strings.Contains(stderr.String(), "--offline requires --since") {
+		t.Errorf("expected error message about --offline requiring --since, got: %s", stderr.String())
 	}
 }
 
