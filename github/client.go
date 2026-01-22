@@ -41,10 +41,12 @@ type Client struct {
 	httpClient  *http.Client
 	logger      *slog.Logger
 	cache       map[string]*cacheEntry
+	repoCache   map[string]*Repository // Application-level repo cache (key: "owner/repo")
 	rateLimit   *RateLimit
 	baseURL     string
 	token       string
 	cacheMu     sync.RWMutex
+	repoCacheMu sync.RWMutex
 	rateLimitMu sync.RWMutex
 }
 
@@ -123,6 +125,7 @@ func NewClient(token string, opts ...Option) *Client {
 		token:      token,
 		logger:     slog.Default(),
 		cache:      make(map[string]*cacheEntry),
+		repoCache:  make(map[string]*Repository),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -148,6 +151,13 @@ func (c *Client) ClearCache() {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
 	c.cache = make(map[string]*cacheEntry)
+}
+
+// ClearRepoCache clears the repository cache.
+func (c *Client) ClearRepoCache() {
+	c.repoCacheMu.Lock()
+	defer c.repoCacheMu.Unlock()
+	c.repoCache = make(map[string]*Repository)
 }
 
 func (c *Client) get(ctx context.Context, path string, result any) error {
@@ -360,42 +370,62 @@ func (c *Client) GetFollowedUsersByUsername(ctx context.Context, username string
 
 // GetStarredRepos returns repositories starred by the authenticated user.
 // This method automatically handles pagination to fetch all starred repos.
+// Repositories are cached in memory to avoid redundant API calls.
 func (c *Client) GetStarredRepos(ctx context.Context) ([]Repository, error) {
 	var repos []Repository
 	if err := c.getPaginated(ctx, "/user/starred", &repos); err != nil {
 		return nil, fmt.Errorf("fetching starred repos: %w", err)
+	}
+	// Cache all fetched repositories
+	for i := range repos {
+		c.CacheRepository(&repos[i])
 	}
 	return repos, nil
 }
 
 // GetStarredReposByUsername returns repositories starred by a specific user.
 // This method automatically handles pagination to fetch all starred repos.
+// Repositories are cached in memory to avoid redundant API calls.
 func (c *Client) GetStarredReposByUsername(ctx context.Context, username string) ([]Repository, error) {
 	var repos []Repository
 	path := fmt.Sprintf("/users/%s/starred", username)
 	if err := c.getPaginated(ctx, path, &repos); err != nil {
 		return nil, fmt.Errorf("fetching repos starred by %s: %w", username, err)
 	}
+	// Cache all fetched repositories
+	for i := range repos {
+		c.CacheRepository(&repos[i])
+	}
 	return repos, nil
 }
 
 // GetOwnedRepos returns repositories owned by the authenticated user.
 // This method automatically handles pagination to fetch all owned repos.
+// Repositories are cached in memory to avoid redundant API calls.
 func (c *Client) GetOwnedRepos(ctx context.Context) ([]Repository, error) {
 	var repos []Repository
 	if err := c.getPaginated(ctx, "/user/repos?type=owner", &repos); err != nil {
 		return nil, fmt.Errorf("fetching owned repos: %w", err)
+	}
+	// Cache all fetched repositories
+	for i := range repos {
+		c.CacheRepository(&repos[i])
 	}
 	return repos, nil
 }
 
 // GetOwnedReposByUsername returns repositories owned by a specific user.
 // This method automatically handles pagination to fetch all owned repos.
+// Repositories are cached in memory to avoid redundant API calls.
 func (c *Client) GetOwnedReposByUsername(ctx context.Context, username string) ([]Repository, error) {
 	var repos []Repository
 	path := fmt.Sprintf("/users/%s/repos?type=owner", username)
 	if err := c.getPaginated(ctx, path, &repos); err != nil {
 		return nil, fmt.Errorf("fetching repos owned by %s: %w", username, err)
+	}
+	// Cache all fetched repositories
+	for i := range repos {
+		c.CacheRepository(&repos[i])
 	}
 	return repos, nil
 }
@@ -420,4 +450,63 @@ func (c *Client) GetReceivedEvents(ctx context.Context, username string) ([]Even
 		return nil, fmt.Errorf("fetching received events for %s: %w", username, err)
 	}
 	return events, nil
+}
+
+// GetRepository fetches a single repository by owner and name.
+// Results are cached in memory to avoid redundant API calls.
+func (c *Client) GetRepository(ctx context.Context, owner, name string) (*Repository, error) {
+	cacheKey := fmt.Sprintf("%s/%s", owner, name)
+
+	// Check cache first
+	c.repoCacheMu.RLock()
+	if cached, ok := c.repoCache[cacheKey]; ok {
+		c.repoCacheMu.RUnlock()
+		c.logger.Debug("using cached repository",
+			"owner", owner,
+			"name", name,
+		)
+		return cached, nil
+	}
+	c.repoCacheMu.RUnlock()
+
+	// Fetch from API
+	var repo Repository
+	path := fmt.Sprintf("/repos/%s/%s", owner, name)
+	if err := c.get(ctx, path, &repo); err != nil {
+		return nil, fmt.Errorf("fetching repository %s/%s: %w", owner, name, err)
+	}
+
+	// Store in cache
+	c.repoCacheMu.Lock()
+	c.repoCache[cacheKey] = &repo
+	c.repoCacheMu.Unlock()
+
+	c.logger.Debug("cached repository",
+		"owner", owner,
+		"name", name,
+	)
+
+	return &repo, nil
+}
+
+// CacheRepository stores a repository in the cache.
+// This is useful for pre-populating the cache with repositories
+// we've already fetched from other API endpoints (e.g., starred repos).
+func (c *Client) CacheRepository(repo *Repository) {
+	if repo == nil {
+		return
+	}
+
+	cacheKey := repo.FullName
+
+	c.repoCacheMu.Lock()
+	defer c.repoCacheMu.Unlock()
+
+	// Only cache if not already present
+	if _, exists := c.repoCache[cacheKey]; !exists {
+		c.repoCache[cacheKey] = repo
+		c.logger.Debug("pre-cached repository",
+			"repo", cacheKey,
+		)
+	}
 }
