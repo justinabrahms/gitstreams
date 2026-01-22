@@ -1112,9 +1112,9 @@ func TestParseSinceDate(t *testing.T) {
 	now := time.Date(2026, 1, 22, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
+		expected time.Time
 		name     string
 		input    string
-		expected time.Time
 		wantErr  bool
 	}{
 		{
