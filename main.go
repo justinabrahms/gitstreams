@@ -42,7 +42,8 @@ type Config struct {
 	NoNotify   bool
 	NoOpen     bool
 	Verbose    bool
-	Days       int // Number of days to look back for activity (default 30)
+	Days       int  // Number of days to look back for activity (default 30)
+	Offline    bool // Skip GitHub API sync and use cached data
 }
 
 // Dependencies holds injectable dependencies for testing.
@@ -120,27 +121,15 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 		return 1
 	}
 
-	if cfg.Token == "" {
+	// Token is only required when not in offline mode
+	if !cfg.Offline && cfg.Token == "" {
 		_, _ = fmt.Fprintln(stderr, "Error: GITHUB_TOKEN environment variable is required")
 		return 1
 	}
 
 	ctx := context.Background()
 
-	// Fetch current activity from GitHub
-	client := deps.GitHubClientFactory(cfg.Token)
-	cutoff := deps.Now().AddDate(0, 0, -cfg.Days)
-	currentSnapshot, err := fetchActivity(ctx, client, deps.Now(), cutoff, stdout, stderr, cfg.Verbose)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "Error fetching activity: %v\n", err)
-		return 1
-	}
-
-	if cfg.Verbose {
-		_, _ = fmt.Fprintf(stdout, "Fetched activity for %d users\n", len(currentSnapshot.Users))
-	}
-
-	// Open storage and get previous snapshot
+	// Open storage
 	store, err := deps.StoreFactory(cfg.DBPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "Error opening database: %v\n", err)
@@ -148,20 +137,67 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	previousSnapshot, err := loadPreviousSnapshot(store)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "Error loading previous snapshot: %v\n", err)
-		return 1
-	}
+	var currentSnapshot *diff.Snapshot
+	var previousSnapshot *diff.Snapshot
 
-	// Save current snapshot
-	if saveErr := saveSnapshot(store, currentSnapshot, deps.Now()); saveErr != nil {
-		_, _ = fmt.Fprintf(stderr, "Error saving snapshot: %v\n", saveErr)
-		return 1
-	}
+	// Fetch current activity from GitHub or load from cache
+	if cfg.Offline {
+		// Load most recent snapshot from storage
+		snapshots, err := store.GetByUser(snapshotUserID, 1)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", err)
+			return 1
+		}
 
-	if cfg.Verbose {
-		_, _ = fmt.Fprintln(stdout, "Saved current snapshot")
+		if len(snapshots) == 0 {
+			_, _ = fmt.Fprintln(stderr, "Error: No cached data available. Run without --offline first to fetch data from GitHub.")
+			return 1
+		}
+
+		currentSnapshot, err = storageToSnapshot(snapshots[0])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", err)
+			return 1
+		}
+
+		_, _ = fmt.Fprintf(stdout, "Using cached data from %s (may be stale)\n", currentSnapshot.CapturedAt.Format("2006-01-02 15:04:05"))
+
+		if cfg.Verbose {
+			_, _ = fmt.Fprintf(stdout, "Loaded cached activity for %d users\n", len(currentSnapshot.Users))
+		}
+
+		// In offline mode, use an empty snapshot as "previous" so the report shows all activities in the cached snapshot
+		previousSnapshot = diff.NewSnapshot(time.Time{})
+	} else {
+		// Fetch current activity from GitHub
+		client := deps.GitHubClientFactory(cfg.Token)
+		cutoff := deps.Now().AddDate(0, 0, -cfg.Days)
+		currentSnapshot, err = fetchActivity(ctx, client, deps.Now(), cutoff, stdout, stderr, cfg.Verbose)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error fetching activity: %v\n", err)
+			return 1
+		}
+
+		if cfg.Verbose {
+			_, _ = fmt.Fprintf(stdout, "Fetched activity for %d users\n", len(currentSnapshot.Users))
+		}
+
+		// Load previous snapshot
+		previousSnapshot, err = loadPreviousSnapshot(store)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading previous snapshot: %v\n", err)
+			return 1
+		}
+
+		// Save current snapshot
+		if saveErr := saveSnapshot(store, currentSnapshot, deps.Now()); saveErr != nil {
+			_, _ = fmt.Fprintf(stderr, "Error saving snapshot: %v\n", saveErr)
+			return 1
+		}
+
+		if cfg.Verbose {
+			_, _ = fmt.Fprintln(stdout, "Saved current snapshot")
+		}
 	}
 
 	// Compare snapshots
@@ -253,6 +289,7 @@ func parseFlags(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.Verbose, "v", false, "Verbose output")
 	fs.BoolVar(&showVersion, "version", false, "Print version and exit")
 	fs.IntVar(&cfg.Days, "days", 30, "Number of days to look back for activity (1-365)")
+	fs.BoolVar(&cfg.Offline, "offline", false, "Skip GitHub API sync and use cached data")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
