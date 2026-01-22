@@ -4,6 +4,9 @@ Track what your GitHub social network has been up to. Get desktop notifications
 and a rich HTML report showing repos starred, new projects, and activity from
 developers you follow.
 
+## What it looks like
+<img width="798" height="842" alt="Screenshot 2026-01-22 at 9 01 30 AM" src="https://github.com/user-attachments/assets/573e5aa3-0126-48b8-bb6f-bde1be203293" />
+
 ## Installation
 
 ### From source
