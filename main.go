@@ -682,6 +682,10 @@ func buildReportWithLogging(result *diff.Result, periodStart, periodEnd, generat
 	for _, event := range result.NewEvents {
 		ua := getOrCreateUserActivity(userActivities, event.Username)
 		activityType := eventTypeToActivityType(event.Event.Type)
+		// Skip events that don't map to an activity type (like CreateEvent)
+		if activityType == "" {
+			continue
+		}
 		ua.Activities = append(ua.Activities, report.Activity{
 			Type:      activityType,
 			User:      event.Username,
@@ -725,7 +729,11 @@ func eventTypeToActivityType(eventType string) report.ActivityType {
 	case "WatchEvent":
 		return report.ActivityStarred
 	case "CreateEvent":
-		return report.ActivityCreatedRepo
+		// Don't convert CreateEvent to ActivityCreatedRepo because:
+		// 1. NewRepos already tracks actual repository creations
+		// 2. CreateEvent includes branch/tag creation, not just repos
+		// Returning empty string will cause this event to be skipped
+		return ""
 	case "ForkEvent":
 		return report.ActivityForked
 	case "PushEvent":
