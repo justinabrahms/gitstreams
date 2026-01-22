@@ -39,10 +39,10 @@ type Config struct {
 	DBPath     string
 	Token      string
 	ReportPath string
+	Days       int // Number of days to look back for activity (default 30)
 	NoNotify   bool
 	NoOpen     bool
 	Verbose    bool
-	Days       int  // Number of days to look back for activity (default 30)
 	Offline    bool // Skip GitHub API sync and use cached data
 }
 
@@ -143,9 +143,9 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	// Fetch current activity from GitHub or load from cache
 	if cfg.Offline {
 		// Load most recent snapshot from storage
-		snapshots, err := store.GetByUser(snapshotUserID, 1)
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", err)
+		snapshots, loadErr := store.GetByUser(snapshotUserID, 1)
+		if loadErr != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", loadErr)
 			return 1
 		}
 
@@ -154,9 +154,9 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 			return 1
 		}
 
-		currentSnapshot, err = storageToSnapshot(snapshots[0])
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", err)
+		currentSnapshot, loadErr = storageToSnapshot(snapshots[0])
+		if loadErr != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", loadErr)
 			return 1
 		}
 
