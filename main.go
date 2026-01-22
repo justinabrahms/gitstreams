@@ -158,7 +158,17 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	}
 
 	// Compare snapshots
+	if cfg.Verbose {
+		_, _ = fmt.Fprintf(stdout, "Previous snapshot has %d users, current snapshot has %d users\n",
+			len(previousSnapshot.Users), len(currentSnapshot.Users))
+	}
+
 	result := diff.Compare(previousSnapshot, currentSnapshot)
+
+	if cfg.Verbose {
+		_, _ = fmt.Fprintf(stdout, "Diff result: NewStars=%d, NewRepos=%d, NewEvents=%d, NewUsers=%d, GoneUsers=%d\n",
+			len(result.NewStars), len(result.NewRepos), len(result.NewEvents), len(result.NewUsers), len(result.GoneUsers))
+	}
 
 	if result.IsEmpty() {
 		_, _ = fmt.Fprintln(stdout, "No new activity detected.")
@@ -166,7 +176,7 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	}
 
 	// Generate report
-	rpt := buildReport(result, previousSnapshot.CapturedAt, currentSnapshot.CapturedAt, deps.Now())
+	rpt := buildReportWithLogging(result, previousSnapshot.CapturedAt, currentSnapshot.CapturedAt, deps.Now(), stderr, cfg.Verbose)
 
 	reportPath := cfg.ReportPath
 	if reportPath == "" {
@@ -418,10 +428,19 @@ func storageToSnapshot(ss *storage.Snapshot) (*diff.Snapshot, error) {
 }
 
 func buildReport(result *diff.Result, periodStart, periodEnd, generatedAt time.Time) *report.Report {
+	return buildReportWithLogging(result, periodStart, periodEnd, generatedAt, nil, false)
+}
+
+func buildReportWithLogging(result *diff.Result, periodStart, periodEnd, generatedAt time.Time, w io.Writer, verbose bool) *report.Report {
 	rpt := &report.Report{
 		GeneratedAt: generatedAt,
 		PeriodStart: periodStart,
 		PeriodEnd:   periodEnd,
+	}
+
+	if verbose && w != nil {
+		_, _ = fmt.Fprintf(w, "buildReport input: NewStars=%d, NewRepos=%d, NewEvents=%d, NewUsers=%d\n",
+			len(result.NewStars), len(result.NewRepos), len(result.NewEvents), len(result.NewUsers))
 	}
 
 	// Group activities by user
@@ -440,6 +459,10 @@ func buildReport(result *diff.Result, periodStart, periodEnd, generatedAt time.T
 		})
 	}
 
+	if verbose && w != nil {
+		_, _ = fmt.Fprintf(w, "buildReport after stars: userActivities map has %d entries\n", len(userActivities))
+	}
+
 	// Add new repos
 	for _, repo := range result.NewRepos {
 		ua := getOrCreateUserActivity(userActivities, repo.Username)
@@ -451,6 +474,10 @@ func buildReport(result *diff.Result, periodStart, periodEnd, generatedAt time.T
 			Timestamp: repo.Repo.CreatedAt,
 			Details:   repo.Repo.Description,
 		})
+	}
+
+	if verbose && w != nil {
+		_, _ = fmt.Fprintf(w, "buildReport after repos: userActivities map has %d entries\n", len(userActivities))
 	}
 
 	// Add new events
@@ -466,9 +493,17 @@ func buildReport(result *diff.Result, periodStart, periodEnd, generatedAt time.T
 		})
 	}
 
+	if verbose && w != nil {
+		_, _ = fmt.Fprintf(w, "buildReport after events: userActivities map has %d entries\n", len(userActivities))
+	}
+
 	// Convert map to slice
 	for _, ua := range userActivities {
 		rpt.UserActivities = append(rpt.UserActivities, *ua)
+	}
+
+	if verbose && w != nil {
+		_, _ = fmt.Fprintf(w, "buildReport output: UserActivities slice has %d entries\n", len(rpt.UserActivities))
 	}
 
 	return rpt

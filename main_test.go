@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -637,6 +638,117 @@ func TestBuildReport(t *testing.T) {
 
 	if len(rpt.UserActivities) != 2 {
 		t.Errorf("expected 2 users with activities, got %d", len(rpt.UserActivities))
+	}
+}
+
+func TestBuildReport_ManyUsersWithActivity(t *testing.T) {
+	// Simulate 30 users, each with one event - should result in 30 UserActivities
+	result := &diff.Result{
+		OldCapturedAt: fixedTime().Add(-24 * time.Hour),
+		NewCapturedAt: fixedTime(),
+	}
+
+	// Create 30 users with events
+	for i := 0; i < 30; i++ {
+		username := fmt.Sprintf("user%d", i)
+		result.NewEvents = append(result.NewEvents, diff.EventChange{
+			Username: username,
+			Event:    diff.Event{Type: "PushEvent", Repo: username + "/repo", CreatedAt: fixedTime()},
+		})
+	}
+
+	rpt := buildReport(result, result.OldCapturedAt, result.NewCapturedAt, fixedTime())
+
+	if len(rpt.UserActivities) != 30 {
+		t.Errorf("expected 30 users with activities, got %d", len(rpt.UserActivities))
+	}
+
+	if rpt.TotalActivities() != 30 {
+		t.Errorf("expected 30 total activities, got %d", rpt.TotalActivities())
+	}
+}
+
+func TestDiffCompare_FirstRun_AllUsersNewWithActivity(t *testing.T) {
+	// Simulate first run: empty previous snapshot, 30 users in current snapshot
+	// Each user has some events - all should appear as NewEvents
+
+	previousSnapshot := diff.NewSnapshot(fixedTime().Add(-24 * time.Hour))
+
+	currentSnapshot := diff.NewSnapshot(fixedTime())
+	for i := 0; i < 30; i++ {
+		username := fmt.Sprintf("user%d", i)
+		currentSnapshot.Users[username] = diff.UserActivity{
+			Username: username,
+			Events: []diff.Event{
+				{Type: "PushEvent", Repo: username + "/repo", CreatedAt: fixedTime()},
+			},
+		}
+	}
+
+	result := diff.Compare(previousSnapshot, currentSnapshot)
+
+	// All 30 users should be new
+	if len(result.NewUsers) != 30 {
+		t.Errorf("expected 30 new users, got %d", len(result.NewUsers))
+	}
+
+	// All 30 users' events should be new
+	if len(result.NewEvents) != 30 {
+		t.Errorf("expected 30 new events, got %d", len(result.NewEvents))
+	}
+
+	// Build report should have 30 users
+	rpt := buildReport(result, previousSnapshot.CapturedAt, currentSnapshot.CapturedAt, fixedTime())
+	if len(rpt.UserActivities) != 30 {
+		t.Errorf("expected 30 users in report, got %d", len(rpt.UserActivities))
+	}
+}
+
+func TestDiffCompare_FirstRun_UsersWithNoActivity(t *testing.T) {
+	// Simulate first run: 30 users but only 1 has activity
+	// BUG REPRODUCTION: 30 users fetched but only 1 shows
+
+	previousSnapshot := diff.NewSnapshot(fixedTime().Add(-24 * time.Hour))
+
+	currentSnapshot := diff.NewSnapshot(fixedTime())
+	// 29 users with NO activity
+	for i := 0; i < 29; i++ {
+		username := fmt.Sprintf("user%d", i)
+		currentSnapshot.Users[username] = diff.UserActivity{
+			Username: username,
+			// No events, no stars, no repos
+		}
+	}
+	// 1 user WITH activity
+	currentSnapshot.Users["active_user"] = diff.UserActivity{
+		Username: "active_user",
+		Events: []diff.Event{
+			{Type: "PushEvent", Repo: "active_user/repo", CreatedAt: fixedTime()},
+		},
+	}
+
+	result := diff.Compare(previousSnapshot, currentSnapshot)
+
+	// All 30 users should be new
+	if len(result.NewUsers) != 30 {
+		t.Errorf("expected 30 new users, got %d", len(result.NewUsers))
+	}
+
+	// Only 1 event
+	if len(result.NewEvents) != 1 {
+		t.Errorf("expected 1 new event, got %d", len(result.NewEvents))
+	}
+
+	// Build report - should only show 1 user (the one with activity)
+	// This is actually EXPECTED behavior - users without activity don't appear
+	rpt := buildReport(result, previousSnapshot.CapturedAt, currentSnapshot.CapturedAt, fixedTime())
+	t.Logf("NewUsers=%d, NewEvents=%d, UserActivities=%d",
+		len(result.NewUsers), len(result.NewEvents), len(rpt.UserActivities))
+
+	// The "bug" is that we have 30 NewUsers but only 1 UserActivity
+	// If we want ALL users to appear, we need to change buildReport
+	if len(rpt.UserActivities) != 1 {
+		t.Errorf("expected 1 user with activity (current behavior), got %d", len(rpt.UserActivities))
 	}
 }
 
