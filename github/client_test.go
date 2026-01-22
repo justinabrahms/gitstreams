@@ -1,10 +1,14 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -326,5 +330,221 @@ func TestEmptyToken(t *testing.T) {
 	_, err := c.GetFollowedUsers(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestETagCaching(t *testing.T) {
+	users := []User{{Login: "user1", ID: 1}}
+	requestCount := 0
+	etag := `"abc123"`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+
+		// Check if client sent If-None-Match header
+		if ifNoneMatch := r.Header.Get("If-None-Match"); ifNoneMatch == etag {
+			// Return 304 Not Modified
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+
+		// First request - return data with ETag
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", etag)
+		if err := json.NewEncoder(w).Encode(users); err != nil {
+			t.Fatalf("encoding response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("test-token", WithBaseURL(server.URL))
+
+	// First request - should get data and cache it
+	result1, err := c.GetFollowedUsers(context.Background())
+	if err != nil {
+		t.Fatalf("first request error: %v", err)
+	}
+	if len(result1) != 1 {
+		t.Errorf("expected 1 user, got %d", len(result1))
+	}
+	if requestCount != 1 {
+		t.Errorf("expected 1 request, got %d", requestCount)
+	}
+
+	// Second request - should send If-None-Match and get 304
+	result2, err := c.GetFollowedUsers(context.Background())
+	if err != nil {
+		t.Fatalf("second request error: %v", err)
+	}
+	if len(result2) != 1 {
+		t.Errorf("expected 1 user from cache, got %d", len(result2))
+	}
+	if result2[0].Login != "user1" {
+		t.Errorf("expected login 'user1' from cache, got %q", result2[0].Login)
+	}
+	if requestCount != 2 {
+		t.Errorf("expected 2 requests, got %d", requestCount)
+	}
+}
+
+func TestIfNoneMatchHeader(t *testing.T) {
+	users := []User{{Login: "user1", ID: 1}}
+	etag := `"test-etag"`
+	receivedIfNoneMatch := ""
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedIfNoneMatch = r.Header.Get("If-None-Match")
+
+		if receivedIfNoneMatch == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", etag)
+		if err := json.NewEncoder(w).Encode(users); err != nil {
+			t.Fatalf("encoding response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("token", WithBaseURL(server.URL))
+
+	// First request - no If-None-Match
+	_, _ = c.GetFollowedUsers(context.Background())
+	if receivedIfNoneMatch != "" {
+		t.Errorf("first request should not have If-None-Match, got %q", receivedIfNoneMatch)
+	}
+
+	// Second request - should have If-None-Match
+	_, _ = c.GetFollowedUsers(context.Background())
+	if receivedIfNoneMatch != etag {
+		t.Errorf("second request should have If-None-Match %q, got %q", etag, receivedIfNoneMatch)
+	}
+}
+
+func TestRateLimitHeaderParsing(t *testing.T) {
+	resetTime := time.Now().Add(time.Hour).Unix()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "4999")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetTime, 10))
+		w.Header().Set("X-RateLimit-Used", "1")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	c := NewClient("token", WithBaseURL(server.URL))
+
+	// Before any request, rate limit should be nil
+	if rl := c.GetRateLimit(); rl != nil {
+		t.Error("expected nil rate limit before any request")
+	}
+
+	_, err := c.GetFollowedUsers(context.Background())
+	if err != nil {
+		t.Fatalf("request error: %v", err)
+	}
+
+	rl := c.GetRateLimit()
+	if rl == nil {
+		t.Fatal("expected rate limit after request")
+	}
+
+	if rl.Limit != 5000 {
+		t.Errorf("expected limit 5000, got %d", rl.Limit)
+	}
+	if rl.Remaining != 4999 {
+		t.Errorf("expected remaining 4999, got %d", rl.Remaining)
+	}
+	if rl.Used != 1 {
+		t.Errorf("expected used 1, got %d", rl.Used)
+	}
+	if rl.Reset.Unix() != resetTime {
+		t.Errorf("expected reset time %d, got %d", resetTime, rl.Reset.Unix())
+	}
+}
+
+func TestRateLimitLowWarning(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "50") // Below threshold of 100
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	c := NewClient("token", WithBaseURL(server.URL), WithLogger(logger))
+
+	_, err := c.GetFollowedUsers(context.Background())
+	if err != nil {
+		t.Fatalf("request error: %v", err)
+	}
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "rate limit is low") {
+		t.Errorf("expected rate limit warning in logs, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "remaining=50") {
+		t.Errorf("expected remaining=50 in warning, got: %s", logOutput)
+	}
+}
+
+func TestClearCache(t *testing.T) {
+	users := []User{{Login: "user1", ID: 1}}
+	requestCount := 0
+	etag := `"cache-test"`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", etag)
+		if err := json.NewEncoder(w).Encode(users); err != nil {
+			t.Fatalf("encoding response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("token", WithBaseURL(server.URL))
+
+	// First request
+	_, _ = c.GetFollowedUsers(context.Background())
+	// Second request (should use cache)
+	_, _ = c.GetFollowedUsers(context.Background())
+
+	if requestCount != 2 {
+		t.Errorf("expected 2 requests before clear, got %d", requestCount)
+	}
+
+	// Clear cache
+	c.ClearCache()
+
+	// Third request (should not send If-None-Match)
+	_, _ = c.GetFollowedUsers(context.Background())
+
+	if requestCount != 3 {
+		t.Errorf("expected 3 requests after clear, got %d", requestCount)
+	}
+}
+
+func TestWithLogger(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	c := NewClient("token", WithLogger(logger))
+	if c.logger != logger {
+		t.Error("expected custom logger to be set")
 	}
 }

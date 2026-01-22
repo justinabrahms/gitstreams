@@ -42,6 +42,7 @@ type Config struct {
 	NoNotify   bool
 	NoOpen     bool
 	Verbose    bool
+	Days       int // Number of days to look back for activity (default 30)
 }
 
 // Dependencies holds injectable dependencies for testing.
@@ -128,7 +129,8 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 
 	// Fetch current activity from GitHub
 	client := deps.GitHubClientFactory(cfg.Token)
-	currentSnapshot, err := fetchActivity(ctx, client, deps.Now(), stdout, stderr, cfg.Verbose)
+	cutoff := deps.Now().AddDate(0, 0, -cfg.Days)
+	currentSnapshot, err := fetchActivity(ctx, client, deps.Now(), cutoff, stdout, stderr, cfg.Verbose)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "Error fetching activity: %v\n", err)
 		return 1
@@ -250,6 +252,7 @@ func parseFlags(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ReportPath, "report", "", "Path to write HTML report (default: temp file)")
 	fs.BoolVar(&cfg.Verbose, "v", false, "Verbose output")
 	fs.BoolVar(&showVersion, "version", false, "Print version and exit")
+	fs.IntVar(&cfg.Days, "days", 30, "Number of days to look back for activity (1-365)")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -257,6 +260,11 @@ func parseFlags(args []string) (*Config, error) {
 
 	if showVersion {
 		return nil, errVersion
+	}
+
+	// Validate days parameter
+	if cfg.Days < 1 || cfg.Days > 365 {
+		return nil, fmt.Errorf("days must be between 1 and 365, got %d", cfg.Days)
 	}
 
 	// Default token from environment
@@ -280,7 +288,7 @@ func parseFlags(args []string) (*Config, error) {
 	return cfg, nil
 }
 
-func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w, progressW io.Writer, verbose bool) (*diff.Snapshot, error) {
+func fetchActivity(ctx context.Context, client GitHubClient, now, cutoff time.Time, w, progressW io.Writer, verbose bool) (*diff.Snapshot, error) {
 	users, err := client.GetFollowedUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetching followed users: %w", err)
@@ -306,7 +314,7 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w, p
 			Username: user.Login,
 		}
 
-		// Fetch starred repos
+		// Fetch starred repos - filter by repo creation date
 		starred, err := client.GetStarredReposByUsername(ctx, user.Login)
 		if err != nil {
 			if verbose {
@@ -314,11 +322,14 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w, p
 			}
 		} else {
 			for _, repo := range starred {
-				activity.StarredRepos = append(activity.StarredRepos, convertRepo(repo))
+				// Only include repos created after the cutoff date
+				if !repo.CreatedAt.Before(cutoff) {
+					activity.StarredRepos = append(activity.StarredRepos, convertRepo(repo))
+				}
 			}
 		}
 
-		// Fetch owned repos
+		// Fetch owned repos - filter by creation or recent push date
 		owned, err := client.GetOwnedReposByUsername(ctx, user.Login)
 		if err != nil {
 			if verbose {
@@ -326,11 +337,14 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w, p
 			}
 		} else {
 			for _, repo := range owned {
-				activity.OwnedRepos = append(activity.OwnedRepos, convertRepo(repo))
+				// Only include repos created after the cutoff date
+				if !repo.CreatedAt.Before(cutoff) {
+					activity.OwnedRepos = append(activity.OwnedRepos, convertRepo(repo))
+				}
 			}
 		}
 
-		// Fetch events
+		// Fetch events - filter by event creation date
 		events, err := client.GetRecentEvents(ctx, user.Login)
 		if err != nil {
 			if verbose {
@@ -338,7 +352,10 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w, p
 			}
 		} else {
 			for _, event := range events {
-				activity.Events = append(activity.Events, convertEvent(event))
+				// Only include events created after the cutoff date
+				if !event.CreatedAt.Before(cutoff) {
+					activity.Events = append(activity.Events, convertEvent(event))
+				}
 			}
 		}
 
