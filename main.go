@@ -146,7 +146,8 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 		}
 
 		// Get snapshot from the "since" date
-		sinceSnapshots, err := store.GetByTimeRange(snapshotUserID, sinceDate.Add(-24*time.Hour), sinceDate.Add(24*time.Hour))
+		var sinceSnapshots []*storage.Snapshot
+		sinceSnapshots, err = store.GetByTimeRange(snapshotUserID, sinceDate.Add(-24*time.Hour), sinceDate.Add(24*time.Hour))
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "Error querying snapshots for --since date: %v\n", err)
 			return 1
