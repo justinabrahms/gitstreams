@@ -641,7 +641,7 @@ func TestBuildReport(t *testing.T) {
 }
 
 func TestFetchActivity_VerboseOutput(t *testing.T) {
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 
 	mockClient := &mockGitHubClient{
 		followedUsers: []github.User{
@@ -653,7 +653,7 @@ func TestFetchActivity_VerboseOutput(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, true)
+	_, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, &stderr, true)
 	if err != nil {
 		t.Fatalf("fetchActivity failed: %v", err)
 	}
@@ -664,7 +664,7 @@ func TestFetchActivity_VerboseOutput(t *testing.T) {
 }
 
 func TestFetchActivity_HandlesPartialErrors(t *testing.T) {
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 
 	mockClient := &mockGitHubClient{
 		followedUsers: []github.User{
@@ -679,7 +679,7 @@ func TestFetchActivity_HandlesPartialErrors(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	snapshot, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, true)
+	snapshot, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, &stderr, true)
 	if err != nil {
 		t.Fatalf("fetchActivity should not fail on partial errors: %v", err)
 	}
@@ -704,6 +704,44 @@ func TestLoadPreviousSnapshot_Empty(t *testing.T) {
 
 	if len(snapshot.Users) != 0 {
 		t.Errorf("expected empty users map, got %d users", len(snapshot.Users))
+	}
+}
+
+func TestFetchActivity_ProgressOutput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{
+			{Login: "user1"},
+			{Login: "user2"},
+			{Login: "user3"},
+		},
+		starredRepos: map[string][]github.Repository{},
+		ownedRepos:   map[string][]github.Repository{},
+		events:       map[string][]github.Event{},
+	}
+
+	ctx := context.Background()
+	_, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, &stderr, false)
+	if err != nil {
+		t.Fatalf("fetchActivity failed: %v", err)
+	}
+
+	// Progress should be written to stderr, not stdout
+	if strings.Contains(stdout.String(), "Fetching activity for user") {
+		t.Errorf("progress should not be written to stdout when not verbose: %s", stdout.String())
+	}
+
+	stderrOutput := stderr.String()
+	// Check that progress messages are in stderr
+	if !strings.Contains(stderrOutput, "Fetching activity for user 1/3: user1...") {
+		t.Errorf("expected progress message for user1 in stderr, got: %q", stderrOutput)
+	}
+	if !strings.Contains(stderrOutput, "Fetching activity for user 2/3: user2...") {
+		t.Errorf("expected progress message for user2 in stderr, got: %q", stderrOutput)
+	}
+	if !strings.Contains(stderrOutput, "Fetching activity for user 3/3: user3...") {
+		t.Errorf("expected progress message for user3 in stderr, got: %q", stderrOutput)
 	}
 }
 

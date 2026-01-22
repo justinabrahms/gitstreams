@@ -16,6 +16,7 @@ import (
 	"github.com/justinabrahms/gitstreams/diff"
 	"github.com/justinabrahms/gitstreams/github"
 	"github.com/justinabrahms/gitstreams/notify"
+	"github.com/justinabrahms/gitstreams/progress"
 	"github.com/justinabrahms/gitstreams/report"
 	"github.com/justinabrahms/gitstreams/storage"
 )
@@ -111,7 +112,7 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 
 	// Fetch current activity from GitHub
 	client := deps.GitHubClientFactory(cfg.Token)
-	currentSnapshot, err := fetchActivity(ctx, client, deps.Now(), stdout, cfg.Verbose)
+	currentSnapshot, err := fetchActivity(ctx, client, deps.Now(), stdout, stderr, cfg.Verbose)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "Error fetching activity: %v\n", err)
 		return 1
@@ -244,7 +245,7 @@ func parseFlags(args []string) (*Config, error) {
 	return cfg, nil
 }
 
-func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w io.Writer, verbose bool) (*diff.Snapshot, error) {
+func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w, progressW io.Writer, verbose bool) (*diff.Snapshot, error) {
 	users, err := client.GetFollowedUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetching followed users: %w", err)
@@ -252,7 +253,16 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w io
 
 	snapshot := diff.NewSnapshot(now)
 
-	for _, user := range users {
+	// Create progress tracker for stderr output
+	prog := progress.NewProgress(progressW, len(users))
+	if len(users) > 0 {
+		prog.Start(fmt.Sprintf("Fetching activity for %d users...", len(users)))
+	}
+
+	for i, user := range users {
+		// Update progress indicator (1-indexed for human-readable output)
+		prog.SetItem(i+1, user.Login)
+
 		if verbose {
 			_, _ = fmt.Fprintf(w, "Fetching activity for %s...\n", user.Login)
 		}
@@ -299,6 +309,9 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w io
 
 		snapshot.Users[user.Login] = activity
 	}
+
+	// Stop progress indicator
+	prog.Done()
 
 	return snapshot, nil
 }
