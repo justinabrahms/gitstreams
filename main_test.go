@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -123,13 +122,7 @@ func TestRun_MissingToken(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	// Unset GITHUB_TOKEN for this test
-	oldToken := os.Getenv("GITHUB_TOKEN")
-	os.Unsetenv("GITHUB_TOKEN")
-	defer func() {
-		if oldToken != "" {
-			os.Setenv("GITHUB_TOKEN", oldToken)
-		}
-	}()
+	t.Setenv("GITHUB_TOKEN", "")
 
 	deps := DefaultDependencies()
 	result := run(&stdout, &stderr, []string{}, deps)
@@ -424,15 +417,7 @@ func TestParseFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldToken := os.Getenv("GITHUB_TOKEN")
-			os.Setenv("GITHUB_TOKEN", tt.envToken)
-			defer func() {
-				if oldToken != "" {
-					os.Setenv("GITHUB_TOKEN", oldToken)
-				} else {
-					os.Unsetenv("GITHUB_TOKEN")
-				}
-			}()
+			t.Setenv("GITHUB_TOKEN", tt.envToken)
 
 			cfg, err := parseFlags(tt.args)
 			if (err != nil) != tt.wantErr {

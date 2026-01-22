@@ -98,12 +98,12 @@ func main() {
 func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	cfg, err := parseFlags(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
 	if cfg.Token == "" {
-		fmt.Fprintln(stderr, "Error: GITHUB_TOKEN environment variable is required")
+		_, _ = fmt.Fprintln(stderr, "Error: GITHUB_TOKEN environment variable is required")
 		return 1
 	}
 
@@ -113,43 +113,43 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	client := deps.GitHubClientFactory(cfg.Token)
 	currentSnapshot, err := fetchActivity(ctx, client, deps.Now(), stdout, cfg.Verbose)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error fetching activity: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error fetching activity: %v\n", err)
 		return 1
 	}
 
 	if cfg.Verbose {
-		fmt.Fprintf(stdout, "Fetched activity for %d users\n", len(currentSnapshot.Users))
+		_, _ = fmt.Fprintf(stdout, "Fetched activity for %d users\n", len(currentSnapshot.Users))
 	}
 
 	// Open storage and get previous snapshot
 	store, err := deps.StoreFactory(cfg.DBPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error opening database: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error opening database: %v\n", err)
 		return 1
 	}
 	defer func() { _ = store.Close() }()
 
 	previousSnapshot, err := loadPreviousSnapshot(store)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error loading previous snapshot: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error loading previous snapshot: %v\n", err)
 		return 1
 	}
 
 	// Save current snapshot
 	if saveErr := saveSnapshot(store, currentSnapshot, deps.Now()); saveErr != nil {
-		fmt.Fprintf(stderr, "Error saving snapshot: %v\n", saveErr)
+		_, _ = fmt.Fprintf(stderr, "Error saving snapshot: %v\n", saveErr)
 		return 1
 	}
 
 	if cfg.Verbose {
-		fmt.Fprintln(stdout, "Saved current snapshot")
+		_, _ = fmt.Fprintln(stdout, "Saved current snapshot")
 	}
 
 	// Compare snapshots
 	result := diff.Compare(previousSnapshot, currentSnapshot)
 
 	if result.IsEmpty() {
-		fmt.Fprintln(stdout, "No new activity detected.")
+		_, _ = fmt.Fprintln(stdout, "No new activity detected.")
 		return 0
 	}
 
@@ -163,24 +163,24 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 
 	generator, err := deps.ReportGenerator()
 	if err != nil {
-		fmt.Fprintf(stderr, "Error creating report generator: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error creating report generator: %v\n", err)
 		return 1
 	}
 
 	f, err := os.Create(reportPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error creating report file: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error creating report file: %v\n", err)
 		return 1
 	}
 
 	if err := generator.Generate(f, rpt); err != nil {
 		_ = f.Close()
-		fmt.Fprintf(stderr, "Error generating report: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error generating report: %v\n", err)
 		return 1
 	}
 	_ = f.Close()
 
-	fmt.Fprintf(stdout, "Report written to %s\n", reportPath)
+	_, _ = fmt.Fprintf(stdout, "Report written to %s\n", reportPath)
 
 	// Send notification
 	if !cfg.NoNotify {
@@ -192,7 +192,7 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 			Sound:    "default",
 		}
 		if err := notifier.Send(n); err != nil {
-			fmt.Fprintf(stderr, "Warning: could not send notification: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "Warning: could not send notification: %v\n", err)
 			// Don't fail on notification errors
 		}
 	}
@@ -200,7 +200,7 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	// Open report in browser
 	if !cfg.NoOpen {
 		if err := deps.OpenBrowser("file://" + reportPath); err != nil {
-			fmt.Fprintf(stderr, "Warning: could not open browser: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "Warning: could not open browser: %v\n", err)
 			// Don't fail on browser errors
 		}
 	}
@@ -254,7 +254,7 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w io
 
 	for _, user := range users {
 		if verbose {
-			fmt.Fprintf(w, "Fetching activity for %s...\n", user.Login)
+			_, _ = fmt.Fprintf(w, "Fetching activity for %s...\n", user.Login)
 		}
 
 		activity := diff.UserActivity{
@@ -265,7 +265,7 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w io
 		starred, err := client.GetStarredReposByUsername(ctx, user.Login)
 		if err != nil {
 			if verbose {
-				fmt.Fprintf(w, "  Warning: could not fetch starred repos for %s: %v\n", user.Login, err)
+				_, _ = fmt.Fprintf(w, "  Warning: could not fetch starred repos for %s: %v\n", user.Login, err)
 			}
 		} else {
 			for _, repo := range starred {
@@ -277,7 +277,7 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w io
 		owned, err := client.GetOwnedReposByUsername(ctx, user.Login)
 		if err != nil {
 			if verbose {
-				fmt.Fprintf(w, "  Warning: could not fetch owned repos for %s: %v\n", user.Login, err)
+				_, _ = fmt.Fprintf(w, "  Warning: could not fetch owned repos for %s: %v\n", user.Login, err)
 			}
 		} else {
 			for _, repo := range owned {
@@ -289,7 +289,7 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w io
 		events, err := client.GetRecentEvents(ctx, user.Login)
 		if err != nil {
 			if verbose {
-				fmt.Fprintf(w, "  Warning: could not fetch events for %s: %v\n", user.Login, err)
+				_, _ = fmt.Fprintf(w, "  Warning: could not fetch events for %s: %v\n", user.Login, err)
 			}
 		} else {
 			for _, event := range events {
