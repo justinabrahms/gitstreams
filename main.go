@@ -100,6 +100,11 @@ func DefaultDependencies() *Dependencies {
 }
 
 func main() {
+	// Handle "version" subcommand before flag parsing
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Printf("gitstreams %s (commit: %s, built: %s)\n", version, commit, date)
+		return
+	}
 	os.Exit(run(os.Stdout, os.Stderr, os.Args[1:], DefaultDependencies()))
 }
 
