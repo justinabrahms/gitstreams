@@ -40,7 +40,7 @@ type Config struct {
 	Token      string
 	ReportPath string
 	Since      string // Generate report from this date (e.g., '2026-01-15' or '7d')
-	Days       int    // Number of days to look back for activity (default 30)
+	Days       int    // How far back to fetch GitHub data (API sync lookback, default 30)
 	NoNotify   bool
 	NoOpen     bool
 	Verbose    bool
@@ -373,7 +373,7 @@ func parseFlags(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ReportPath, "report", "", "Path to write HTML report (default: temp file)")
 	fs.BoolVar(&cfg.Verbose, "v", false, "Verbose output")
 	fs.BoolVar(&showVersion, "version", false, "Print version and exit")
-	fs.IntVar(&cfg.Days, "days", 30, "Number of days to look back for activity (1-365)")
+	fs.IntVar(&cfg.Days, "sync-lookback-days", 30, "How far back to fetch GitHub data (1-365 days, doesn't affect report filtering)")
 	fs.StringVar(&cfg.Since, "since", "", "Generate report from historical data (e.g., '2026-01-15' or '7d' for 7 days ago)")
 	fs.BoolVar(&cfg.Offline, "offline", false, "Use only cached data, skip GitHub API calls")
 

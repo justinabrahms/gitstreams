@@ -40,7 +40,7 @@ gitstreams
 | `-token` | GitHub token (default: `$GITHUB_TOKEN`) |
 | `-db` | Path to SQLite database (default: `~/.gitstreams/gitstreams.db`) |
 | `-report` | Path to write HTML report (default: temp file) |
-| `-days` | Number of days to look back for activity (1-365, default: 30) |
+| `-sync-lookback-days` | How far back to fetch GitHub data (1-365 days, default: 30) |
 | `-offline` | Skip GitHub API sync and use cached data |
 | `-no-notify` | Skip desktop notification |
 | `-no-open` | Don't open report in browser |
@@ -55,8 +55,8 @@ gitstreams -no-notify -no-open -report ~/reports/today.html
 # Verbose mode with custom database
 gitstreams -v -db /path/to/my.db
 
-# Only show activity from the last 7 days
-gitstreams -days 7
+# Fetch GitHub data from the last 7 days
+gitstreams -sync-lookback-days 7
 
 # Use cached data without hitting GitHub API (fast, but may be stale)
 gitstreams -offline

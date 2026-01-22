@@ -1070,7 +1070,7 @@ func TestRun_DaysFlag(t *testing.T) {
 	result := run(&stdout, &stderr, []string{
 		"-token", "test-token",
 		"-db", filepath.Join(tmpDir, "test.db"),
-		"-days", "7",
+		"-sync-lookback-days", "7",
 		"-no-open",
 		"-no-notify",
 	}, deps)
@@ -1088,7 +1088,7 @@ func TestRun_DaysFlagInvalid(t *testing.T) {
 	// Test with invalid days (too low)
 	result := run(&stdout, &stderr, []string{
 		"-token", "test-token",
-		"-days", "0",
+		"-sync-lookback-days", "0",
 	}, deps)
 
 	if result != 1 {
@@ -1103,7 +1103,7 @@ func TestRun_DaysFlagInvalid(t *testing.T) {
 	stderr.Reset()
 	result = run(&stdout, &stderr, []string{
 		"-token", "test-token",
-		"-days", "400",
+		"-sync-lookback-days", "400",
 	}, deps)
 
 	if result != 1 {
