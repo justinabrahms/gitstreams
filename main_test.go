@@ -1325,22 +1325,9 @@ func TestRun_OfflineMode(t *testing.T) {
 	}
 }
 
-func TestRun_OfflineWithoutSince_Fails(t *testing.T) {
-	deps := DefaultDependencies()
-
-	var stdout, stderr bytes.Buffer
-	args := []string{"-offline"}
-
-	exitCode := run(&stdout, &stderr, args, deps)
-
-	if exitCode == 0 {
-		t.Error("expected non-zero exit code when using --offline without --since")
-	}
-
-	if !strings.Contains(stderr.String(), "--offline requires --since") {
-		t.Errorf("expected error message about --offline requiring --since, got: %s", stderr.String())
-	}
-}
+// TestRun_OfflineWithoutSince - --offline can be used standalone or with --since
+// Standalone --offline mode uses cached data for a quick report without GitHub API calls
+// This test is removed as --offline is now supported both with and without --since
 
 func TestRun_BrowserError_DoesNotFail(t *testing.T) {
 	var stdout, stderr bytes.Buffer

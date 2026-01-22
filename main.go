@@ -203,6 +203,34 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 			}
 			// Don't save in historical mode
 		}
+	} else if cfg.Offline {
+		// Standalone offline mode: use cached data without historical comparison
+		var snapshots []*storage.Snapshot
+		snapshots, err = store.GetByUser(snapshotUserID, 1)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", err)
+			return 1
+		}
+
+		if len(snapshots) == 0 {
+			_, _ = fmt.Fprintln(stderr, "Error: No cached data available. Run without --offline first to fetch data from GitHub.")
+			return 1
+		}
+
+		currentSnapshot, err = storageToSnapshot(snapshots[0])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error loading cached snapshot: %v\n", err)
+			return 1
+		}
+
+		_, _ = fmt.Fprintf(stdout, "Using cached data from %s (may be stale)\n", currentSnapshot.CapturedAt.Format("2006-01-02 15:04:05"))
+
+		if cfg.Verbose {
+			_, _ = fmt.Fprintf(stdout, "Loaded cached activity for %d users\n", len(currentSnapshot.Users))
+		}
+
+		// In standalone offline mode, use an empty snapshot as "previous" so the report shows all activities in the cached snapshot
+		previousSnapshot = diff.NewSnapshot(time.Time{})
 	} else {
 		// Normal mode: fetch current data and compare with most recent snapshot
 		if cfg.Token == "" {
@@ -347,9 +375,7 @@ func parseFlags(args []string) (*Config, error) {
 
 	// Validate since and offline flags
 	// Note: --since without --offline is allowed, but requires token for current data
-	if cfg.Offline && cfg.Since == "" {
-		return nil, fmt.Errorf("--offline requires --since to specify the time range")
-	}
+	// Note: --offline without --since is allowed for standalone cached mode
 
 	// Default token from environment
 	if cfg.Token == "" {
