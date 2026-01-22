@@ -147,7 +147,17 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	}
 
 	// Compare snapshots
+	if cfg.Verbose {
+		_, _ = fmt.Fprintf(stdout, "Previous snapshot has %d users, current snapshot has %d users\n",
+			len(previousSnapshot.Users), len(currentSnapshot.Users))
+	}
+
 	result := diff.Compare(previousSnapshot, currentSnapshot)
+
+	if cfg.Verbose {
+		_, _ = fmt.Fprintf(stdout, "Diff result: NewStars=%d, NewRepos=%d, NewEvents=%d, NewUsers=%d, GoneUsers=%d\n",
+			len(result.NewStars), len(result.NewRepos), len(result.NewEvents), len(result.NewUsers), len(result.GoneUsers))
+	}
 
 	if result.IsEmpty() {
 		_, _ = fmt.Fprintln(stdout, "No new activity detected.")
