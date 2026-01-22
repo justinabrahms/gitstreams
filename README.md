@@ -1,53 +1,75 @@
 # gitstreams
 
-A local tool that tracks what your GitHub social network has been up to and
-surfaces interesting activity via daily desktop notifications with an HTML
-report.
+Track what your GitHub social network has been up to. Get desktop notifications
+and a rich HTML report showing repos starred, new projects, and activity from
+developers you follow.
 
-## What it does
+## Installation
 
-- Fetches activity from people you follow on GitHub (repos starred, repos
-  created, contribution patterns, etc.)
-- Stores snapshots locally to detect changes over time
-- Runs daily via launchd and sends a desktop notification when there's something
-  interesting
-- Opens a local HTML report with details
+### From source
 
-## Status
+```bash
+go install github.com/justinabrahms/gitstreams@latest
+```
 
-Early exploration. "Interesting" is not yet defined - that's part of what we're
-figuring out.
+Or clone and build:
+
+```bash
+git clone https://github.com/justinabrahms/gitstreams.git
+cd gitstreams
+go build -o gitstreams .
+```
+
+## Usage
+
+```bash
+# Set your token
+export GITHUB_TOKEN=your_token_here
+
+# Run
+gitstreams
+```
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `-token` | GitHub token (default: `$GITHUB_TOKEN`) |
+| `-db` | Path to SQLite database (default: `~/.gitstreams/gitstreams.db`) |
+| `-report` | Path to write HTML report (default: temp file) |
+| `-no-notify` | Skip desktop notification |
+| `-no-open` | Don't open report in browser |
+| `-v` | Verbose output |
+
+### Examples
+
+```bash
+# Run quietly, just generate report
+gitstreams -no-notify -no-open -report ~/reports/today.html
+
+# Verbose mode with custom database
+gitstreams -v -db /path/to/my.db
+```
+
+## HTML Report
+
+The generated report includes:
+
+- **Summary stats** — stars, new repos, PRs, forks, pushes, issues at a glance
+- **Highlight of the day** — featured activity (prioritizes new repos and PRs)
+- **Dual view toggle** — switch between "By Category" and "By User" groupings
+- **Collapsible sections** — expand/collapse each category or user
+- **Activity icons** — ⭐ stars, 🆕 repos, 🔀 PRs, 🔱 forks, 📤 pushes, 🐛 issues
+- **Hot activity badges** — 🔥 marks high-engagement actions (new repos, PRs)
+- **MVP badge** — 🏆 highlights the most active user
+- **Relative timestamps** — "2 hours ago", "yesterday", "last week"
+- **Fun taglines** — dynamic header message based on activity volume
 
 ## Requirements
 
-- Go 1.21+
-- GitHub personal access token
-- macOS (for launchd scheduling and notifications)
-
-## Setup
-
-```bash
-# Clone
-git clone https://github.com/justinabrahms/gitstreams.git
-cd gitstreams
-
-# Configure
-export GITHUB_TOKEN=your_token_here
-
-# Build
-go build -o gitstreams .
-
-# Run manually
-./gitstreams
-```
-
-## Architecture
-
-- **Data source**: GitHub API via personal access token
-- **Storage**: SQLite for historical snapshots
-- **Scheduling**: launchd plist (macOS)
-- **Notifications**: `terminal-notifier` or `osascript`
-- **Output**: Local HTML report
+- Go 1.22+
+- GitHub personal access token with `read:user` scope
+- macOS for notifications (optional — use `-no-notify` elsewhere)
 
 ## License
 
