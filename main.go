@@ -140,8 +140,8 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	}
 	defer func() {
 		if cleanup != nil {
-			if err := cleanup(); err != nil {
-				_, _ = fmt.Fprintf(stderr, "Warning: failed to cleanup OpenTelemetry: %v\n", err)
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				_, _ = fmt.Fprintf(stderr, "Warning: failed to cleanup OpenTelemetry: %v\n", cleanupErr)
 			}
 		}
 	}()
