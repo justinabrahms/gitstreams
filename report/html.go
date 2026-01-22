@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"sort"
 	"time"
 )
 
@@ -114,13 +115,113 @@ func categoryName(t ActivityType) string {
 	}
 }
 
+// ActivityStats holds counts by activity type.
+type ActivityStats struct {
+	Stars  int
+	Repos  int
+	Forks  int
+	Pushes int
+	PRs    int
+	Issues int
+}
+
+// GetStats returns activity counts by type.
+func (r *Report) GetStats() ActivityStats {
+	stats := ActivityStats{}
+	for _, ua := range r.UserActivities {
+		for _, a := range ua.Activities {
+			switch a.Type {
+			case ActivityStarred:
+				stats.Stars++
+			case ActivityCreatedRepo:
+				stats.Repos++
+			case ActivityForked:
+				stats.Forks++
+			case ActivityPushed:
+				stats.Pushes++
+			case ActivityPR:
+				stats.PRs++
+			case ActivityIssue:
+				stats.Issues++
+			}
+		}
+	}
+	return stats
+}
+
+// Highlight represents the most interesting activity to feature.
+type Highlight struct {
+	Activity Activity
+	User     string
+	Reason   string
+}
+
+// GetHighlight returns the most interesting activity to feature.
+// Priority: new repos > PRs > stars > other.
+func (r *Report) GetHighlight() *Highlight {
+	var best *Highlight
+
+	for _, ua := range r.UserActivities {
+		for _, a := range ua.Activities {
+			candidate := &Highlight{Activity: a, User: ua.User}
+
+			switch a.Type {
+			case ActivityCreatedRepo:
+				candidate.Reason = "🚀 Fresh off the press!"
+				if best == nil || best.Activity.Type != ActivityCreatedRepo {
+					best = candidate
+				}
+			case ActivityPR:
+				candidate.Reason = "💪 Making things happen!"
+				if best == nil || (best.Activity.Type != ActivityCreatedRepo && best.Activity.Type != ActivityPR) {
+					best = candidate
+				}
+			case ActivityStarred:
+				candidate.Reason = "👀 Spotted something cool!"
+				if best == nil || (best.Activity.Type != ActivityCreatedRepo &&
+					best.Activity.Type != ActivityPR &&
+					best.Activity.Type != ActivityStarred) {
+					best = candidate
+				}
+			default:
+				if best == nil {
+					candidate.Reason = "✨ Check this out!"
+					best = candidate
+				}
+			}
+		}
+	}
+
+	return best
+}
+
+// MostActiveUser returns the user with the most activities.
+func (r *Report) MostActiveUser() string {
+	if len(r.UserActivities) == 0 {
+		return ""
+	}
+
+	sorted := make([]UserActivity, len(r.UserActivities))
+	copy(sorted, r.UserActivities)
+	sort.Slice(sorted, func(i, j int) bool {
+		return len(sorted[i].Activities) > len(sorted[j].Activities)
+	})
+
+	return sorted[0].User
+}
+
+// IsHotActivity returns true if this activity type is considered "hot" (high engagement).
+func IsHotActivity(t ActivityType) bool {
+	return t == ActivityCreatedRepo || t == ActivityPR
+}
+
 // activityIcon returns an emoji icon for the activity type.
 func activityIcon(t ActivityType) string {
 	switch t {
 	case ActivityStarred:
 		return "⭐"
 	case ActivityCreatedRepo:
-		return "📦"
+		return "🆕"
 	case ActivityForked:
 		return "🔱"
 	case ActivityPushed:
@@ -131,6 +232,27 @@ func activityIcon(t ActivityType) string {
 		return "🐛"
 	default:
 		return "📋"
+	}
+}
+
+// isHot is a template function to check if activity is hot.
+func isHot(t ActivityType) bool {
+	return IsHotActivity(t)
+}
+
+// tagline returns a fun message based on activity count.
+func tagline(count int) string {
+	switch {
+	case count == 0:
+		return "The calm before the storm..."
+	case count <= 3:
+		return "A quiet day in the neighborhood"
+	case count <= 10:
+		return "Your network has been busy!"
+	case count <= 25:
+		return "Lots of action today! 🎉"
+	default:
+		return "Your network is ON FIRE! 🔥🔥🔥"
 	}
 }
 
@@ -224,7 +346,7 @@ const htmlTemplate = `<!DOCTYPE html>
             color: #24292f;
         }
         header {
-            background: #24292f;
+            background: linear-gradient(135deg, #24292f 0%, #1a1f24 100%);
             color: white;
             padding: 20px;
             border-radius: 8px;
@@ -233,9 +355,14 @@ const htmlTemplate = `<!DOCTYPE html>
         header h1 {
             margin: 0 0 10px 0;
         }
+        .tagline {
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            opacity: 0.9;
+        }
         .meta {
             font-size: 0.9em;
-            opacity: 0.8;
+            opacity: 0.7;
         }
         .summary {
             background: white;
@@ -244,26 +371,70 @@ const htmlTemplate = `<!DOCTYPE html>
             border: 1px solid #d0d7de;
             margin-bottom: 20px;
         }
-        .summary-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 10px;
+        .summary-main {
+            font-size: 1.1em;
+            margin-bottom: 10px;
+        }
+        .stats-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
             margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #eee;
         }
-        .summary-stat {
-            text-align: center;
-            padding: 8px;
-            background: #f6f8fa;
-            border-radius: 6px;
-        }
-        .summary-stat .count {
-            font-size: 1.4em;
-            font-weight: 600;
-            display: block;
-        }
-        .summary-stat .label {
-            font-size: 0.8em;
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.9em;
             color: #656d76;
+        }
+        .stat-item .stat-icon {
+            font-size: 1.1em;
+        }
+        .stat-item .stat-count {
+            font-weight: 600;
+            color: #24292f;
+        }
+        .highlight {
+            background: linear-gradient(135deg, #fff8e1 0%, #fff3c4 100%);
+            border: 1px solid #f0c36d;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+        }
+        .highlight-header {
+            font-weight: 600;
+            color: #b08800;
+            margin-bottom: 8px;
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .highlight-content {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        .highlight-icon {
+            font-size: 1.5em;
+        }
+        .highlight-text {
+            flex: 1;
+        }
+        .highlight-text a {
+            color: #0969da;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .highlight-text a:hover {
+            text-decoration: underline;
+        }
+        .highlight-reason {
+            font-size: 0.9em;
+            color: #656d76;
+            margin-top: 4px;
         }
         .category-section {
             background: white;
@@ -367,6 +538,15 @@ const htmlTemplate = `<!DOCTYPE html>
             font-size: 0.85em;
             font-weight: 500;
         }
+        .mvp-badge {
+            background: #ffc107;
+            color: #000;
+            font-size: 0.7em;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: 600;
+            margin-left: auto;
+        }
         .activity-list {
             list-style: none;
             margin: 0;
@@ -379,12 +559,22 @@ const htmlTemplate = `<!DOCTYPE html>
             gap: 10px;
             align-items: flex-start;
         }
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+        .activity-item.hot {
+            background: linear-gradient(90deg, #fff5f5 0%, white 100%);
+        }
         .activity-icon {
             font-size: 1.2em;
         }
         .activity-user {
             font-weight: 500;
             color: #24292f;
+        }
+        .hot-badge {
+            font-size: 0.8em;
+            margin-left: 4px;
         }
         .activity-content {
             flex: 1;
@@ -409,6 +599,10 @@ const htmlTemplate = `<!DOCTYPE html>
             text-align: center;
             padding: 40px;
             color: #656d76;
+        }
+        .empty-state .empty-icon {
+            font-size: 3em;
+            margin-bottom: 10px;
         }
         .view-toggle {
             display: flex;
@@ -441,27 +635,45 @@ const htmlTemplate = `<!DOCTYPE html>
 </head>
 <body>
     <header>
-        <h1>GitStreams Activity Report</h1>
+        <h1>🌊 GitStreams</h1>
+        <div class="tagline">{{tagline .TotalActivities}}</div>
         <div class="meta">
-            Generated: {{.GeneratedAt.Format "Jan 2, 2006 3:04 PM"}}<br>
-            Period: {{.PeriodStart.Format "Jan 2"}} - {{.PeriodEnd.Format "Jan 2, 2006"}}
+            {{.PeriodStart.Format "Jan 2"}} → {{.PeriodEnd.Format "Jan 2, 2006"}}
         </div>
     </header>
 
+    {{$stats := .GetStats}}
     <div class="summary">
-        <strong>{{.TotalActivities}}</strong> interesting {{if eq .TotalActivities 1}}activity{{else}}activities{{end}} from <strong>{{len .UserActivities}}</strong> {{if eq (len .UserActivities) 1}}user{{else}}users{{end}} you follow.
-        {{if .UserActivities}}
-        <div class="summary-grid">
-            {{range .ActivitiesByCategory}}
-            <div class="summary-stat">
-                <span class="count">{{icon .Type}} {{len .Activities}}</span>
-                <span class="label">{{categoryName .Type}}</span>
-            </div>
-            {{end}}
+        <div class="summary-main">
+            <strong>{{.TotalActivities}}</strong> {{if eq .TotalActivities 1}}thing happened{{else}}things happened{{end}} across <strong>{{len .UserActivities}}</strong> {{if eq (len .UserActivities) 1}}developer{{else}}developers{{end}} you follow.
+        </div>
+        {{if gt .TotalActivities 0}}
+        <div class="stats-grid">
+            {{if gt $stats.Stars 0}}<div class="stat-item"><span class="stat-icon">⭐</span><span class="stat-count">{{$stats.Stars}}</span> star{{if ne $stats.Stars 1}}s{{end}}</div>{{end}}
+            {{if gt $stats.Repos 0}}<div class="stat-item"><span class="stat-icon">🆕</span><span class="stat-count">{{$stats.Repos}}</span> new repo{{if ne $stats.Repos 1}}s{{end}}</div>{{end}}
+            {{if gt $stats.PRs 0}}<div class="stat-item"><span class="stat-icon">🔀</span><span class="stat-count">{{$stats.PRs}}</span> PR{{if ne $stats.PRs 1}}s{{end}}</div>{{end}}
+            {{if gt $stats.Forks 0}}<div class="stat-item"><span class="stat-icon">🔱</span><span class="stat-count">{{$stats.Forks}}</span> fork{{if ne $stats.Forks 1}}s{{end}}</div>{{end}}
+            {{if gt $stats.Pushes 0}}<div class="stat-item"><span class="stat-icon">📤</span><span class="stat-count">{{$stats.Pushes}}</span> push{{if ne $stats.Pushes 1}}es{{end}}</div>{{end}}
+            {{if gt $stats.Issues 0}}<div class="stat-item"><span class="stat-icon">🐛</span><span class="stat-count">{{$stats.Issues}}</span> issue{{if ne $stats.Issues 1}}s{{end}}</div>{{end}}
         </div>
         {{end}}
     </div>
 
+    {{$highlight := .GetHighlight}}
+    {{if $highlight}}
+    <div class="highlight">
+        <div class="highlight-header">✨ Highlight of the Day</div>
+        <div class="highlight-content">
+            <span class="highlight-icon">{{icon $highlight.Activity.Type}}</span>
+            <div class="highlight-text">
+                <strong>{{$highlight.User}}</strong> {{verb $highlight.Activity.Type}} <a href="{{$highlight.Activity.RepoURL}}">{{$highlight.Activity.RepoName}}</a>
+                <div class="highlight-reason">{{$highlight.Reason}}</div>
+            </div>
+        </div>
+    </div>
+    {{end}}
+
+    {{$mostActive := .MostActiveUser}}
     {{if .UserActivities}}
     <div class="view-toggle">
         <button class="active" onclick="toggleView('category')">By Category</button>
@@ -479,7 +691,8 @@ const htmlTemplate = `<!DOCTYPE html>
                 </summary>
                 <ul class="activity-list">
                     {{range .Activities}}
-                    <li class="activity-item">
+                    <li class="activity-item{{if isHot .Type}} hot{{end}}">
+                        <span class="activity-icon">{{icon .Type}}{{if isHot .Type}}<span class="hot-badge">🔥</span>{{end}}</span>
                         <div class="activity-content">
                             <span class="activity-user">{{.User}}</span> {{verb .Type}} <a href="{{.RepoURL}}">{{.RepoName}}</a>
                             <div class="activity-time">{{relTime .Timestamp}}</div>
@@ -500,12 +713,13 @@ const htmlTemplate = `<!DOCTYPE html>
                 <summary>
                     {{if .AvatarURL}}<img src="{{.AvatarURL}}" alt="{{.User}}">{{end}}
                     <h2>{{.User}}</h2>
+                    {{if eq .User $mostActive}}<span class="mvp-badge">🏆 MVP</span>{{end}}
                     <span class="user-count">{{len .Activities}}</span>
                 </summary>
                 <ul class="activity-list">
                     {{range .Activities}}
-                    <li class="activity-item">
-                        <span class="activity-icon">{{icon .Type}}</span>
+                    <li class="activity-item{{if isHot .Type}} hot{{end}}">
+                        <span class="activity-icon">{{icon .Type}}{{if isHot .Type}}<span class="hot-badge">🔥</span>{{end}}</span>
                         <div class="activity-content">
                             <span>{{verb .Type}} <a href="{{.RepoURL}}">{{.RepoName}}</a></span>
                             <div class="activity-time">{{relTime .Timestamp}}</div>
@@ -529,8 +743,9 @@ const htmlTemplate = `<!DOCTYPE html>
     </script>
     {{else}}
         <div class="empty-state">
-            <p>No interesting activity to report.</p>
-            <p>Check back later!</p>
+            <div class="empty-icon">😴</div>
+            <p>Nothing to see here... yet!</p>
+            <p>Your network is taking a break. Check back later!</p>
         </div>
     {{end}}
 </body>
@@ -547,6 +762,8 @@ func NewHTMLGenerator() (*HTMLGenerator, error) {
 	funcMap := template.FuncMap{
 		"icon":         activityIcon,
 		"verb":         activityVerb,
+		"isHot":        isHot,
+		"tagline":      tagline,
 		"categoryName": categoryName,
 		"relTime":      relativeTime,
 	}
