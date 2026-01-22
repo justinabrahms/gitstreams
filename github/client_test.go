@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -547,5 +548,143 @@ func TestWithLogger(t *testing.T) {
 	c := NewClient("token", WithLogger(logger))
 	if c.logger != logger {
 		t.Error("expected custom logger to be set")
+	}
+}
+
+func TestGetFollowedUsersPagination(t *testing.T) {
+	// Create test users across multiple pages
+	// Page 1: 100 users, Page 2: 100 users, Page 3: 2 users (total: 202)
+	page1Users := make([]User, 100)
+	for i := 0; i < 100; i++ {
+		page1Users[i] = User{Login: fmt.Sprintf("user%d", i), ID: int64(i)}
+	}
+
+	page2Users := make([]User, 100)
+	for i := 0; i < 100; i++ {
+		page2Users[i] = User{Login: fmt.Sprintf("user%d", i+100), ID: int64(i + 100)}
+	}
+
+	page3Users := []User{
+		{Login: "user200", ID: 200},
+		{Login: "user201", ID: 201},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check path
+		if r.URL.Path != "/user/following" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+
+		// Parse query params
+		query := r.URL.Query()
+		page := query.Get("page")
+		perPage := query.Get("per_page")
+
+		// Verify per_page is set to 100
+		if perPage != "100" {
+			t.Errorf("expected per_page=100, got %s", perPage)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		// Return appropriate page
+		switch page {
+		case "1":
+			if err := json.NewEncoder(w).Encode(page1Users); err != nil {
+				t.Fatalf("encoding page 1: %v", err)
+			}
+		case "2":
+			if err := json.NewEncoder(w).Encode(page2Users); err != nil {
+				t.Fatalf("encoding page 2: %v", err)
+			}
+		case "3":
+			if err := json.NewEncoder(w).Encode(page3Users); err != nil {
+				t.Fatalf("encoding page 3: %v", err)
+			}
+		default:
+			t.Errorf("unexpected page number: %s", page)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("test-token", WithBaseURL(server.URL))
+	result, err := c.GetFollowedUsers(context.Background())
+	if err != nil {
+		t.Fatalf("GetFollowedUsers() error: %v", err)
+	}
+
+	// Should have fetched all 202 users
+	if len(result) != 202 {
+		t.Errorf("expected 202 users, got %d", len(result))
+	}
+
+	// Verify first user from page 1
+	if result[0].Login != "user0" {
+		t.Errorf("expected first user 'user0', got %q", result[0].Login)
+	}
+
+	// Verify last user from page 3
+	if result[201].Login != "user201" {
+		t.Errorf("expected last user 'user201', got %q", result[201].Login)
+	}
+
+	// Verify a user from page 2
+	if result[150].Login != "user150" {
+		t.Errorf("expected middle user 'user150', got %q", result[150].Login)
+	}
+}
+
+func TestGetStarredReposPagination(t *testing.T) {
+	// Test with exactly 100 repos (single page, should not request page 2)
+	repos := make([]Repository, 100)
+	for i := 0; i < 100; i++ {
+		repos[i] = Repository{
+			ID:       int64(i),
+			Name:     fmt.Sprintf("repo%d", i),
+			FullName: fmt.Sprintf("owner/repo%d", i),
+		}
+	}
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+
+		query := r.URL.Query()
+		page := query.Get("page")
+
+		if page == "1" {
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(repos); err != nil {
+				t.Fatalf("encoding repos: %v", err)
+			}
+		} else if page == "2" {
+			// Should not request page 2 if page 1 had exactly 100 items
+			// Return empty to stop pagination
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode([]Repository{}); err != nil {
+				t.Fatalf("encoding empty repos: %v", err)
+			}
+		} else {
+			t.Errorf("unexpected page: %s", page)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient("test-token", WithBaseURL(server.URL))
+	result, err := c.GetStarredRepos(context.Background())
+	if err != nil {
+		t.Fatalf("GetStarredRepos() error: %v", err)
+	}
+
+	if len(result) != 100 {
+		t.Errorf("expected 100 repos, got %d", len(result))
+	}
+
+	// Should have made exactly 2 requests (page 1 and page 2 to check if more data exists)
+	// Actually, with the < perPage check, it should only make 1 request
+	// Let me fix the logic - if we get exactly perPage items, we need to check the next page
+	// So it should make 2 requests
+	if requestCount != 2 {
+		t.Errorf("expected 2 requests, got %d", requestCount)
 	}
 }
