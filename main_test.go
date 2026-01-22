@@ -866,7 +866,7 @@ func TestFetchActivity_ProgressOutput(t *testing.T) {
 func TestFetchActivity_FiltersOldData(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	now := fixedTime() // 2024-01-15
+	now := fixedTime()               // 2024-01-15
 	cutoff := now.AddDate(0, 0, -30) // 30 days ago = 2023-12-16
 
 	// Create repos with different creation dates
@@ -946,7 +946,7 @@ func TestFetchActivity_FiltersOldData(t *testing.T) {
 func TestFetchActivity_FiltersBoundaryDates(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	now := fixedTime() // 2024-01-15
+	now := fixedTime()               // 2024-01-15
 	cutoff := now.AddDate(0, 0, -30) // exactly 30 days ago
 
 	// Repo created exactly at cutoff should be included (not before)
@@ -966,8 +966,8 @@ func TestFetchActivity_FiltersBoundaryDates(t *testing.T) {
 		starredRepos: map[string][]github.Repository{
 			"user1": {boundaryRepo, justBeforeRepo},
 		},
-		ownedRepos:   map[string][]github.Repository{},
-		events:       map[string][]github.Event{},
+		ownedRepos: map[string][]github.Repository{},
+		events:     map[string][]github.Event{},
 	}
 
 	ctx := context.Background()
