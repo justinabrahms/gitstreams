@@ -13,7 +13,7 @@ func TestActivityIcon(t *testing.T) {
 		want         string
 	}{
 		{ActivityStarred, "⭐"},
-		{ActivityCreatedRepo, "📦"},
+		{ActivityCreatedRepo, "🆕"},
 		{ActivityForked, "🔱"},
 		{ActivityPushed, "📤"},
 		{ActivityPR, "🔀"},
@@ -176,9 +176,8 @@ func TestHTMLGeneratorGenerate(t *testing.T) {
 	}{
 		{"DOCTYPE", "<!DOCTYPE html>"},
 		{"title", "<title>GitStreams Activity Report</title>"},
-		{"generated time", "Jan 15, 2024 2:30 PM"},
-		{"period", "Jan 8 - Jan 15, 2024"},
-		{"total activities", "<strong>3</strong> interesting"},
+		{"period", "Jan 8"},
+		{"total activities", "<strong>3</strong>"},
 		{"user count", "<strong>2</strong>"},
 		{"octocat user", "octocat"},
 		{"torvalds user", "torvalds"},
@@ -187,9 +186,16 @@ func TestHTMLGeneratorGenerate(t *testing.T) {
 		{"repo link", `href="https://github.com/golang/go"`},
 		{"avatar", `src="https://github.com/octocat.png"`},
 		{"star icon", "⭐"},
-		{"created icon", "📦"},
+		{"created icon", "🆕"},
 		{"pushed icon", "📤"},
 		{"details", "A new awesome project"},
+		{"highlight section", "Highlight of the Day"},
+		{"hot badge on new repo", "🔥"},
+		{"mvp badge", "MVP"},
+		{"stats grid", "stats-grid"},
+		{"category toggle button", `onclick="toggleView('category')"`},
+		{"user toggle button", `onclick="toggleView('user')"`},
+		{"category section", `class="category-section"`},
 	}
 
 	for _, check := range checks {
@@ -224,11 +230,15 @@ func TestHTMLGeneratorGenerateEmptyReport(t *testing.T) {
 	html := buf.String()
 
 	// Should show empty state
-	if !strings.Contains(html, "No interesting activity to report") {
+	if !strings.Contains(html, "Nothing to see here") {
 		t.Error("Empty report should show empty state message")
 	}
-	if !strings.Contains(html, "<strong>0</strong> interesting") {
+	if !strings.Contains(html, "<strong>0</strong>") {
 		t.Error("Empty report should show 0 activities")
+	}
+	// Should have fun tagline for empty report
+	if !strings.Contains(html, "calm before the storm") {
+		t.Error("Empty report should have calm tagline")
 	}
 }
 
@@ -262,11 +272,11 @@ func TestHTMLGeneratorGenerateSingular(t *testing.T) {
 	html := buf.String()
 
 	// Should use singular form
-	if !strings.Contains(html, "1</strong> interesting activity") {
-		t.Error("Should use singular 'activity' for count of 1")
+	if !strings.Contains(html, "1</strong> thing happened") {
+		t.Error("Should use singular 'thing happened' for count of 1")
 	}
-	if !strings.Contains(html, "1</strong> user") {
-		t.Error("Should use singular 'user' for count of 1")
+	if !strings.Contains(html, "1</strong> developer") {
+		t.Error("Should use singular 'developer' for count of 1")
 	}
 }
 
@@ -386,6 +396,219 @@ func TestReportActivitiesByCategoryEmpty(t *testing.T) {
 	}
 }
 
+func TestGetStats(t *testing.T) {
+	now := time.Now()
+	report := &Report{
+		UserActivities: []UserActivity{
+			{
+				User: "alice",
+				Activities: []Activity{
+					{Type: ActivityStarred, Timestamp: now},
+					{Type: ActivityStarred, Timestamp: now},
+					{Type: ActivityCreatedRepo, Timestamp: now},
+				},
+			},
+			{
+				User: "bob",
+				Activities: []Activity{
+					{Type: ActivityPR, Timestamp: now},
+					{Type: ActivityIssue, Timestamp: now},
+					{Type: ActivityForked, Timestamp: now},
+				},
+			},
+		},
+	}
+
+	stats := report.GetStats()
+
+	if stats.Stars != 2 {
+		t.Errorf("GetStats().Stars = %d, want 2", stats.Stars)
+	}
+	if stats.Repos != 1 {
+		t.Errorf("GetStats().Repos = %d, want 1", stats.Repos)
+	}
+	if stats.PRs != 1 {
+		t.Errorf("GetStats().PRs = %d, want 1", stats.PRs)
+	}
+	if stats.Issues != 1 {
+		t.Errorf("GetStats().Issues = %d, want 1", stats.Issues)
+	}
+	if stats.Forks != 1 {
+		t.Errorf("GetStats().Forks = %d, want 1", stats.Forks)
+	}
+}
+
+func TestGetHighlight(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name     string
+		report   *Report
+		wantNil  bool
+		wantType ActivityType
+		wantUser string
+	}{
+		{
+			name:    "empty report",
+			report:  &Report{},
+			wantNil: true,
+		},
+		{
+			name: "prefers new repos",
+			report: &Report{
+				UserActivities: []UserActivity{
+					{
+						User: "alice",
+						Activities: []Activity{
+							{Type: ActivityStarred, Timestamp: now},
+							{Type: ActivityCreatedRepo, Timestamp: now},
+						},
+					},
+				},
+			},
+			wantType: ActivityCreatedRepo,
+			wantUser: "alice",
+		},
+		{
+			name: "prefers PRs over stars",
+			report: &Report{
+				UserActivities: []UserActivity{
+					{
+						User: "bob",
+						Activities: []Activity{
+							{Type: ActivityStarred, Timestamp: now},
+							{Type: ActivityPR, Timestamp: now},
+						},
+					},
+				},
+			},
+			wantType: ActivityPR,
+			wantUser: "bob",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			highlight := tt.report.GetHighlight()
+			if tt.wantNil {
+				if highlight != nil {
+					t.Error("GetHighlight() should return nil for empty report")
+				}
+				return
+			}
+			if highlight == nil {
+				t.Fatal("GetHighlight() should not return nil")
+			}
+			if highlight.Activity.Type != tt.wantType {
+				t.Errorf("GetHighlight().Activity.Type = %v, want %v", highlight.Activity.Type, tt.wantType)
+			}
+			if highlight.User != tt.wantUser {
+				t.Errorf("GetHighlight().User = %v, want %v", highlight.User, tt.wantUser)
+			}
+			if highlight.Reason == "" {
+				t.Error("GetHighlight().Reason should not be empty")
+			}
+		})
+	}
+}
+
+func TestMostActiveUser(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name   string
+		report *Report
+		want   string
+	}{
+		{
+			name:   "empty report",
+			report: &Report{},
+			want:   "",
+		},
+		{
+			name: "single user",
+			report: &Report{
+				UserActivities: []UserActivity{
+					{User: "alice", Activities: []Activity{{Type: ActivityStarred, Timestamp: now}}},
+				},
+			},
+			want: "alice",
+		},
+		{
+			name: "multiple users - most active wins",
+			report: &Report{
+				UserActivities: []UserActivity{
+					{User: "alice", Activities: []Activity{{Type: ActivityStarred, Timestamp: now}}},
+					{User: "bob", Activities: []Activity{
+						{Type: ActivityStarred, Timestamp: now},
+						{Type: ActivityPR, Timestamp: now},
+						{Type: ActivityCreatedRepo, Timestamp: now},
+					}},
+					{User: "carol", Activities: []Activity{
+						{Type: ActivityStarred, Timestamp: now},
+						{Type: ActivityPR, Timestamp: now},
+					}},
+				},
+			},
+			want: "bob",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.report.MostActiveUser()
+			if got != tt.want {
+				t.Errorf("MostActiveUser() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsHotActivity(t *testing.T) {
+	tests := []struct {
+		activityType ActivityType
+		want         bool
+	}{
+		{ActivityCreatedRepo, true},
+		{ActivityPR, true},
+		{ActivityStarred, false},
+		{ActivityForked, false},
+		{ActivityPushed, false},
+		{ActivityIssue, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.activityType), func(t *testing.T) {
+			got := IsHotActivity(tt.activityType)
+			if got != tt.want {
+				t.Errorf("IsHotActivity(%q) = %v, want %v", tt.activityType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTagline(t *testing.T) {
+	tests := []struct {
+		count    int
+		contains string
+	}{
+		{0, "calm"},
+		{2, "quiet"},
+		{5, "busy"},
+		{15, "action"},
+		{50, "FIRE"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(rune(tt.count)), func(t *testing.T) {
+			got := tagline(tt.count)
+			if !strings.Contains(got, tt.contains) {
+				t.Errorf("tagline(%d) = %q, should contain %q", tt.count, got, tt.contains)
+			}
+		})
+	}
+}
+
 func TestHTMLGeneratorGenerateCategoryView(t *testing.T) {
 	gen, err := NewHTMLGenerator()
 	if err != nil {
@@ -429,8 +652,6 @@ func TestHTMLGeneratorGenerateCategoryView(t *testing.T) {
 		{"collapsible details", "<details open>"},
 		{"summary element", "<summary>"},
 		{"view toggle script", "function toggleView"},
-		{"summary grid", `class="summary-grid"`},
-		{"summary stat", `class="summary-stat"`},
 	}
 
 	for _, check := range checks {
