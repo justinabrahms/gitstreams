@@ -1638,8 +1638,8 @@ func TestFilterResultBySinceDate_BoundaryConditions(t *testing.T) {
 	sinceDate := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name          string
 		createdAt     time.Time
+		name          string
 		shouldInclude bool
 	}{
 		{

@@ -280,14 +280,15 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	// This is needed because snapshots contain historical data (e.g., 30 days),
 	// so we need to filter out activities that occurred before the since date
 	if cfg.Since != "" {
-		sinceDate, err := parseSinceDate(cfg.Since, deps.Now())
+		var filterDate time.Time
+		filterDate, err = parseSinceDate(cfg.Since, deps.Now())
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "Error parsing --since date for filtering: %v\n", err)
 			return 1
 		}
-		result = filterResultBySinceDate(result, sinceDate)
+		result = filterResultBySinceDate(result, filterDate)
 		if cfg.Verbose {
-			_, _ = fmt.Fprintf(stdout, "Filtered results to only show activity from %s onwards\n", sinceDate.Format("2006-01-02"))
+			_, _ = fmt.Fprintf(stdout, "Filtered results to only show activity from %s onwards\n", filterDate.Format("2006-01-02"))
 		}
 	}
 
