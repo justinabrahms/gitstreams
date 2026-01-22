@@ -6,17 +6,46 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 )
 
 const defaultBaseURL = "https://api.github.com"
+
+// rateLimitWarningThreshold is the number of remaining requests below which
+// a warning will be logged.
+const rateLimitWarningThreshold = 100
+
+// cacheEntry stores a cached API response with its ETag.
+type cacheEntry struct {
+	etag      string
+	data      []byte
+	timestamp time.Time
+}
+
+// RateLimit contains GitHub API rate limit information.
+type RateLimit struct {
+	Limit     int
+	Remaining int
+	Reset     time.Time
+	Used      int
+}
 
 // Client is a GitHub API client.
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
 	token      string
+	logger     *slog.Logger
+
+	cacheMu sync.RWMutex
+	cache   map[string]*cacheEntry
+
+	rateLimitMu sync.RWMutex
+	rateLimit   *RateLimit
 }
 
 // User represents a GitHub user.
@@ -79,17 +108,46 @@ func WithBaseURL(url string) Option {
 	}
 }
 
+// WithLogger sets a custom logger for the client.
+func WithLogger(l *slog.Logger) Option {
+	return func(client *Client) {
+		client.logger = l
+	}
+}
+
 // NewClient creates a new GitHub API client.
 func NewClient(token string, opts ...Option) *Client {
 	c := &Client{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    defaultBaseURL,
 		token:      token,
+		logger:     slog.Default(),
+		cache:      make(map[string]*cacheEntry),
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c
+}
+
+// GetRateLimit returns the current rate limit information.
+// Returns nil if no rate limit information has been received yet.
+func (c *Client) GetRateLimit() *RateLimit {
+	c.rateLimitMu.RLock()
+	defer c.rateLimitMu.RUnlock()
+	if c.rateLimit == nil {
+		return nil
+	}
+	// Return a copy to avoid race conditions
+	rl := *c.rateLimit
+	return &rl
+}
+
+// ClearCache clears the ETag cache.
+func (c *Client) ClearCache() {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	c.cache = make(map[string]*cacheEntry)
 }
 
 func (c *Client) get(ctx context.Context, path string, result any) error {
@@ -106,24 +164,123 @@ func (c *Client) get(ctx context.Context, path string, result any) error {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
+	// Check cache for ETag and add If-None-Match header
+	c.cacheMu.RLock()
+	cached := c.cache[path]
+	c.cacheMu.RUnlock()
+	if cached != nil && cached.etag != "" {
+		req.Header.Set("If-None-Match", cached.etag)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// Parse and store rate limit headers
+	c.parseRateLimitHeaders(resp)
+
+	// Handle 304 Not Modified - return cached data
+	if resp.StatusCode == http.StatusNotModified && cached != nil {
+		c.logger.Debug("using cached response",
+			"path", path,
+			"etag", cached.etag,
+		)
+		if result != nil {
+			if err := json.Unmarshal(cached.data, result); err != nil {
+				return fmt.Errorf("decoding cached response: %w", err)
+			}
+		}
+		return nil
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
+	// Read the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading response: %w", err)
+	}
+
+	// Store ETag and response in cache if we got an ETag
+	if etag := resp.Header.Get("ETag"); etag != "" {
+		c.cacheMu.Lock()
+		c.cache[path] = &cacheEntry{
+			etag:      etag,
+			data:      body,
+			timestamp: time.Now(),
+		}
+		c.cacheMu.Unlock()
+		c.logger.Debug("cached response",
+			"path", path,
+			"etag", etag,
+		)
+	}
+
 	if result != nil {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		if err := json.Unmarshal(body, result); err != nil {
 			return fmt.Errorf("decoding response: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// parseRateLimitHeaders extracts rate limit information from response headers.
+func (c *Client) parseRateLimitHeaders(resp *http.Response) {
+	rl := &RateLimit{}
+
+	if v := resp.Header.Get("X-RateLimit-Limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			rl.Limit = n
+		}
+	}
+
+	if v := resp.Header.Get("X-RateLimit-Remaining"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			rl.Remaining = n
+		}
+	}
+
+	if v := resp.Header.Get("X-RateLimit-Reset"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			rl.Reset = time.Unix(n, 0)
+		}
+	}
+
+	if v := resp.Header.Get("X-RateLimit-Used"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			rl.Used = n
+		}
+	}
+
+	// Only update if we got valid rate limit data
+	if rl.Limit > 0 {
+		c.rateLimitMu.Lock()
+		c.rateLimit = rl
+		c.rateLimitMu.Unlock()
+
+		// Log rate limit info
+		c.logger.Debug("rate limit status",
+			"remaining", rl.Remaining,
+			"limit", rl.Limit,
+			"reset", rl.Reset,
+		)
+
+		// Warn if rate limit is low
+		if rl.Remaining < rateLimitWarningThreshold {
+			c.logger.Warn("GitHub API rate limit is low",
+				"remaining", rl.Remaining,
+				"limit", rl.Limit,
+				"reset", rl.Reset,
+				"reset_in", time.Until(rl.Reset).Round(time.Second),
+			)
+		}
+	}
 }
 
 // GetFollowedUsers returns the users that the authenticated user follows.
