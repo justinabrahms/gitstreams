@@ -808,8 +808,16 @@ const htmlTemplate = `<!DOCTYPE html>
         }
         .activity-details {
             font-size: 0.9em;
-            color: #656d76;
-            margin-top: 4px;
+            color: #57606a;
+            margin-top: 6px;
+            padding: 6px 10px;
+            background: #f6f8fa;
+            border-radius: 4px;
+            border-left: 3px solid #d0d7de;
+            line-height: 1.5;
+        }
+        .activity-details:empty {
+            display: none;
         }
         .empty-state {
             text-align: center;
@@ -913,7 +921,7 @@ const htmlTemplate = `<!DOCTYPE html>
                         <div class="activity-content">
                             <span class="activity-user">{{if .AvatarURL}}<img src="{{.AvatarURL}}" alt="{{.User}}" class="activity-avatar">{{end}}{{.User}}</span> {{aggVerb .Type .Count}} <a href="{{.RepoURL}}">{{.RepoName}}</a>
                             <div class="activity-time">{{timeRange .FirstTime .LastTime}}</div>
-                            {{if .Details}}<div class="activity-details">{{.Details}}</div>{{end}}
+                            {{if .Details}}<div class="activity-details">💬 {{.Details}}</div>{{end}}
                         </div>
                     </li>
                     {{end}}
@@ -940,7 +948,7 @@ const htmlTemplate = `<!DOCTYPE html>
                         <div class="activity-content">
                             <span>{{aggVerb .Type .Count}} <a href="{{.RepoURL}}">{{.RepoName}}</a></span>
                             <div class="activity-time">{{timeRange .FirstTime .LastTime}}</div>
-                            {{if .Details}}<div class="activity-details">{{.Details}}</div>{{end}}
+                            {{if .Details}}<div class="activity-details">💬 {{.Details}}</div>{{end}}
                         </div>
                     </li>
                     {{end}}
