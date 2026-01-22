@@ -765,7 +765,9 @@ func TestFetchActivity_VerboseOutput(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, &stderr, true)
+	now := fixedTime()
+	cutoff := now.AddDate(0, 0, -30) // 30 days ago
+	_, err := fetchActivity(ctx, mockClient, now, cutoff, &stdout, &stderr, true)
 	if err != nil {
 		t.Fatalf("fetchActivity failed: %v", err)
 	}
@@ -791,7 +793,9 @@ func TestFetchActivity_HandlesPartialErrors(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	snapshot, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, &stderr, true)
+	now := fixedTime()
+	cutoff := now.AddDate(0, 0, -30) // 30 days ago
+	snapshot, err := fetchActivity(ctx, mockClient, now, cutoff, &stdout, &stderr, true)
 	if err != nil {
 		t.Fatalf("fetchActivity should not fail on partial errors: %v", err)
 	}
@@ -834,7 +838,9 @@ func TestFetchActivity_ProgressOutput(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, &stderr, false)
+	now := fixedTime()
+	cutoff := now.AddDate(0, 0, -30) // 30 days ago
+	_, err := fetchActivity(ctx, mockClient, now, cutoff, &stdout, &stderr, false)
 	if err != nil {
 		t.Fatalf("fetchActivity failed: %v", err)
 	}
@@ -854,6 +860,196 @@ func TestFetchActivity_ProgressOutput(t *testing.T) {
 	}
 	if !strings.Contains(stderrOutput, "Fetching activity for user 3/3: user3...") {
 		t.Errorf("expected progress message for user3 in stderr, got: %q", stderrOutput)
+	}
+}
+
+func TestFetchActivity_FiltersOldData(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	now := fixedTime() // 2024-01-15
+	cutoff := now.AddDate(0, 0, -30) // 30 days ago = 2023-12-16
+
+	// Create repos with different creation dates
+	recentRepo := github.Repository{
+		Name:      "recent-repo",
+		Owner:     github.User{Login: "owner"},
+		CreatedAt: now.AddDate(0, 0, -10), // 10 days ago - should be included
+	}
+	oldRepo := github.Repository{
+		Name:      "old-repo",
+		Owner:     github.User{Login: "owner"},
+		CreatedAt: now.AddDate(-1, 0, 0), // 1 year ago - should be filtered out
+	}
+
+	// Create events with different dates
+	recentEvent := github.Event{
+		Type:      "PushEvent",
+		Actor:     github.User{Login: "user1"},
+		Repo:      github.EventRepo{Name: "owner/repo"},
+		CreatedAt: now.AddDate(0, 0, -5), // 5 days ago - should be included
+	}
+	oldEvent := github.Event{
+		Type:      "PushEvent",
+		Actor:     github.User{Login: "user1"},
+		Repo:      github.EventRepo{Name: "owner/old-repo"},
+		CreatedAt: now.AddDate(0, -3, 0), // 3 months ago - should be filtered out
+	}
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{
+			{Login: "user1"},
+		},
+		starredRepos: map[string][]github.Repository{
+			"user1": {recentRepo, oldRepo},
+		},
+		ownedRepos: map[string][]github.Repository{
+			"user1": {recentRepo, oldRepo},
+		},
+		events: map[string][]github.Event{
+			"user1": {recentEvent, oldEvent},
+		},
+	}
+
+	ctx := context.Background()
+	snapshot, err := fetchActivity(ctx, mockClient, now, cutoff, &stdout, &stderr, false)
+	if err != nil {
+		t.Fatalf("fetchActivity failed: %v", err)
+	}
+
+	activity := snapshot.Users["user1"]
+
+	// Check starred repos filtering
+	if len(activity.StarredRepos) != 1 {
+		t.Errorf("expected 1 starred repo (recent only), got %d", len(activity.StarredRepos))
+	}
+	if len(activity.StarredRepos) > 0 && activity.StarredRepos[0].Name != "recent-repo" {
+		t.Errorf("expected recent-repo, got %s", activity.StarredRepos[0].Name)
+	}
+
+	// Check owned repos filtering
+	if len(activity.OwnedRepos) != 1 {
+		t.Errorf("expected 1 owned repo (recent only), got %d", len(activity.OwnedRepos))
+	}
+	if len(activity.OwnedRepos) > 0 && activity.OwnedRepos[0].Name != "recent-repo" {
+		t.Errorf("expected recent-repo, got %s", activity.OwnedRepos[0].Name)
+	}
+
+	// Check events filtering
+	if len(activity.Events) != 1 {
+		t.Errorf("expected 1 event (recent only), got %d", len(activity.Events))
+	}
+	if len(activity.Events) > 0 && activity.Events[0].Repo != "owner/repo" {
+		t.Errorf("expected owner/repo event, got %s", activity.Events[0].Repo)
+	}
+}
+
+func TestFetchActivity_FiltersBoundaryDates(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	now := fixedTime() // 2024-01-15
+	cutoff := now.AddDate(0, 0, -30) // exactly 30 days ago
+
+	// Repo created exactly at cutoff should be included (not before)
+	boundaryRepo := github.Repository{
+		Name:      "boundary-repo",
+		Owner:     github.User{Login: "owner"},
+		CreatedAt: cutoff, // exactly at cutoff - should be included
+	}
+	justBeforeRepo := github.Repository{
+		Name:      "just-before-repo",
+		Owner:     github.User{Login: "owner"},
+		CreatedAt: cutoff.Add(-1 * time.Second), // 1 second before cutoff - should be filtered
+	}
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{{Login: "user1"}},
+		starredRepos: map[string][]github.Repository{
+			"user1": {boundaryRepo, justBeforeRepo},
+		},
+		ownedRepos:   map[string][]github.Repository{},
+		events:       map[string][]github.Event{},
+	}
+
+	ctx := context.Background()
+	snapshot, err := fetchActivity(ctx, mockClient, now, cutoff, &stdout, &stderr, false)
+	if err != nil {
+		t.Fatalf("fetchActivity failed: %v", err)
+	}
+
+	activity := snapshot.Users["user1"]
+
+	// Only boundary repo should be included
+	if len(activity.StarredRepos) != 1 {
+		t.Errorf("expected 1 starred repo (boundary only), got %d", len(activity.StarredRepos))
+	}
+	if len(activity.StarredRepos) > 0 && activity.StarredRepos[0].Name != "boundary-repo" {
+		t.Errorf("expected boundary-repo, got %s", activity.StarredRepos[0].Name)
+	}
+}
+
+func TestRun_DaysFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{},
+	}
+	mockStoreInst := &mockStore{snapshots: []*storage.Snapshot{}}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient { return mockClient },
+		StoreFactory:        func(dbPath string) (Store, error) { return mockStoreInst, nil },
+		NotifierFactory:     func() Notifier { return &mockNotifier{} },
+		ReportGenerator:     func() (ReportGenerator, error) { return &mockReportGenerator{}, nil },
+		OpenBrowser:         func(url string) error { return nil },
+		Now:                 fixedTime,
+	}
+
+	// Test with custom days flag
+	result := run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-db", filepath.Join(tmpDir, "test.db"),
+		"-days", "7",
+		"-no-open",
+		"-no-notify",
+	}, deps)
+
+	if result != 0 {
+		t.Errorf("expected exit code 0, got %d", result)
+	}
+}
+
+func TestRun_DaysFlagInvalid(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	deps := DefaultDependencies()
+
+	// Test with invalid days (too low)
+	result := run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-days", "0",
+	}, deps)
+
+	if result != 1 {
+		t.Errorf("expected exit code 1 for invalid days, got %d", result)
+	}
+	if !strings.Contains(stderr.String(), "days must be between 1 and 365") {
+		t.Errorf("expected error about days range, got: %s", stderr.String())
+	}
+
+	// Test with invalid days (too high)
+	stdout.Reset()
+	stderr.Reset()
+	result = run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-days", "400",
+	}, deps)
+
+	if result != 1 {
+		t.Errorf("expected exit code 1 for invalid days, got %d", result)
+	}
+	if !strings.Contains(stderr.String(), "days must be between 1 and 365") {
+		t.Errorf("expected error about days range, got: %s", stderr.String())
 	}
 }
 
