@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/justinabrahms/gitstreams/diff"
 	"github.com/justinabrahms/gitstreams/github"
 	"github.com/justinabrahms/gitstreams/notify"
+	"github.com/justinabrahms/gitstreams/otel"
 	"github.com/justinabrahms/gitstreams/report"
 	"github.com/justinabrahms/gitstreams/storage"
 )
@@ -192,6 +194,8 @@ func TestRun_SuccessfulRun_NoChanges(t *testing.T) {
 		ReportGenerator:     func() (ReportGenerator, error) { return mockGenInst, nil },
 		OpenBrowser:         func(url string) error { browserOpened = true; return nil },
 		Now:                 fixedTime,
+		Tracer:              otel.Tracer(),
+		Logger:              slog.Default(),
 	}
 
 	result := run(&stdout, &stderr, []string{

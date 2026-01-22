@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,9 +17,12 @@ import (
 	"github.com/justinabrahms/gitstreams/diff"
 	"github.com/justinabrahms/gitstreams/github"
 	"github.com/justinabrahms/gitstreams/notify"
+	"github.com/justinabrahms/gitstreams/otel"
 	"github.com/justinabrahms/gitstreams/progress"
 	"github.com/justinabrahms/gitstreams/report"
 	"github.com/justinabrahms/gitstreams/storage"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -55,6 +59,8 @@ type Dependencies struct {
 	ReportGenerator     func() (ReportGenerator, error)
 	OpenBrowser         func(url string) error
 	Now                 func() time.Time
+	Tracer              trace.Tracer
+	Logger              *slog.Logger
 }
 
 // GitHubClient defines the GitHub API operations we need.
@@ -100,6 +106,8 @@ func DefaultDependencies() *Dependencies {
 		},
 		OpenBrowser: openBrowser,
 		Now:         time.Now,
+		Tracer:      otel.Tracer(),
+		Logger:      slog.Default(),
 	}
 }
 
@@ -122,6 +130,21 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
+
+	// Initialize OpenTelemetry (optional, only if OTEL env vars are set)
+	ctx := context.Background()
+	_, cleanup, err := otel.Setup(ctx, deps.Logger)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "Warning: failed to initialize OpenTelemetry: %v\n", err)
+		// Don't fail on OTEL setup errors, just warn
+	}
+	defer func() {
+		if cleanup != nil {
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				_, _ = fmt.Fprintf(stderr, "Warning: failed to cleanup OpenTelemetry: %v\n", cleanupErr)
+			}
+		}
+	}()
 
 	// Open storage first to support both live and historical modes
 	store, err := deps.StoreFactory(cfg.DBPath)
@@ -463,10 +486,19 @@ func parseSinceDate(dateStr string, now time.Time) (time.Time, error) {
 }
 
 func fetchActivity(ctx context.Context, client GitHubClient, now, cutoff time.Time, w, progressW io.Writer, verbose bool) (*diff.Snapshot, error) {
+	tracer := otel.Tracer()
+	ctx, span := tracer.Start(ctx, "fetchActivity")
+	defer span.End()
+
+	// Fetch followed users
+	ctx, usersSpan := tracer.Start(ctx, "getFollowedUsers")
 	users, err := client.GetFollowedUsers(ctx)
+	usersSpan.End()
 	if err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf("fetching followed users: %w", err)
 	}
+	span.SetAttributes(attribute.Int("user_count", len(users)))
 
 	snapshot := diff.NewSnapshot(now)
 
@@ -484,12 +516,19 @@ func fetchActivity(ctx context.Context, client GitHubClient, now, cutoff time.Ti
 			_, _ = fmt.Fprintf(w, "Fetching activity for %s...\n", user.Login)
 		}
 
+		// Create a span for this user's activity
+		_, userSpan := tracer.Start(ctx, "fetchUserActivity",
+			trace.WithAttributes(attribute.String("user", user.Login)))
+
 		activity := diff.UserActivity{
 			Username: user.Login,
 		}
 
 		// Fetch starred repos - filter by repo creation date
+		_, starredSpan := tracer.Start(ctx, "getStarredRepos",
+			trace.WithAttributes(attribute.String("user", user.Login)))
 		starred, err := client.GetStarredReposByUsername(ctx, user.Login)
+		starredSpan.End()
 		if err != nil {
 			if verbose {
 				_, _ = fmt.Fprintf(w, "  Warning: could not fetch starred repos for %s: %v\n", user.Login, err)
@@ -504,7 +543,10 @@ func fetchActivity(ctx context.Context, client GitHubClient, now, cutoff time.Ti
 		}
 
 		// Fetch owned repos - filter by creation or recent push date
+		_, ownedSpan := tracer.Start(ctx, "getOwnedRepos",
+			trace.WithAttributes(attribute.String("user", user.Login)))
 		owned, err := client.GetOwnedReposByUsername(ctx, user.Login)
+		ownedSpan.End()
 		if err != nil {
 			if verbose {
 				_, _ = fmt.Fprintf(w, "  Warning: could not fetch owned repos for %s: %v\n", user.Login, err)
@@ -519,7 +561,10 @@ func fetchActivity(ctx context.Context, client GitHubClient, now, cutoff time.Ti
 		}
 
 		// Fetch events - filter by event creation date
+		_, eventsSpan := tracer.Start(ctx, "getRecentEvents",
+			trace.WithAttributes(attribute.String("user", user.Login)))
 		events, err := client.GetRecentEvents(ctx, user.Login)
+		eventsSpan.End()
 		if err != nil {
 			if verbose {
 				_, _ = fmt.Fprintf(w, "  Warning: could not fetch events for %s: %v\n", user.Login, err)
@@ -534,6 +579,7 @@ func fetchActivity(ctx context.Context, client GitHubClient, now, cutoff time.Ti
 		}
 
 		snapshot.Users[user.Login] = activity
+		userSpan.End()
 	}
 
 	// Stop progress indicator
