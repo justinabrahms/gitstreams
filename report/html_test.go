@@ -578,6 +578,7 @@ func TestGetHighlight(t *testing.T) {
 			}
 			if highlight == nil {
 				t.Fatal("GetHighlight() should not return nil")
+				return
 			}
 			if highlight.Activity.Type != tt.wantType {
 				t.Errorf("GetHighlight().Activity.Type = %v, want %v", highlight.Activity.Type, tt.wantType)
