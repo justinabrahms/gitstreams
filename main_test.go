@@ -1522,3 +1522,168 @@ func TestRun_OfflineMode_NoTokenRequired(t *testing.T) {
 		t.Errorf("should not require GITHUB_TOKEN in offline mode, got: %s", stderr.String())
 	}
 }
+
+func TestFilterResultBySinceDate(t *testing.T) {
+	now := time.Date(2026, 1, 22, 12, 0, 0, 0, time.UTC)
+	sinceDate := time.Date(2026, 1, 21, 0, 0, 0, 0, time.UTC)
+	oldDate := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC) // 3 weeks ago
+
+	result := &diff.Result{
+		OldCapturedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		NewCapturedAt: now,
+		NewStars: []diff.RepoChange{
+			{
+				Username: "simonw",
+				Repo: diff.Repo{
+					Owner:     "simonw",
+					Name:      "old-repo",
+					CreatedAt: oldDate, // Should be filtered out
+				},
+			},
+			{
+				Username: "octocat",
+				Repo: diff.Repo{
+					Owner:     "octocat",
+					Name:      "new-repo",
+					CreatedAt: sinceDate.Add(time.Hour), // Should be included
+				},
+			},
+		},
+		NewRepos: []diff.RepoChange{
+			{
+				Username: "user1",
+				Repo: diff.Repo{
+					Owner:     "user1",
+					Name:      "ancient-repo",
+					CreatedAt: oldDate, // Should be filtered out
+				},
+			},
+			{
+				Username: "user2",
+				Repo: diff.Repo{
+					Owner:     "user2",
+					Name:      "recent-repo",
+					CreatedAt: now, // Should be included
+				},
+			},
+		},
+		NewEvents: []diff.EventChange{
+			{
+				Username: "simonw",
+				Event: diff.Event{
+					Type:      "PushEvent",
+					Actor:     "simonw",
+					Repo:      "simonw/old-project",
+					CreatedAt: oldDate, // Should be filtered out
+				},
+			},
+			{
+				Username: "octocat",
+				Event: diff.Event{
+					Type:      "PushEvent",
+					Actor:     "octocat",
+					Repo:      "octocat/fresh-project",
+					CreatedAt: sinceDate, // Exactly on since date - should be included
+				},
+			},
+		},
+		NewUsers:  []string{"newuser1", "newuser2"},
+		GoneUsers: []string{"goneuser1"},
+	}
+
+	filtered := filterResultBySinceDate(result, sinceDate)
+
+	// Check that timestamps are preserved
+	if !filtered.OldCapturedAt.Equal(result.OldCapturedAt) {
+		t.Errorf("OldCapturedAt mismatch: got %v, want %v", filtered.OldCapturedAt, result.OldCapturedAt)
+	}
+	if !filtered.NewCapturedAt.Equal(result.NewCapturedAt) {
+		t.Errorf("NewCapturedAt mismatch: got %v, want %v", filtered.NewCapturedAt, result.NewCapturedAt)
+	}
+
+	// Check that user lists are preserved
+	if len(filtered.NewUsers) != 2 || filtered.NewUsers[0] != "newuser1" {
+		t.Errorf("NewUsers not preserved: got %v, want %v", filtered.NewUsers, result.NewUsers)
+	}
+	if len(filtered.GoneUsers) != 1 || filtered.GoneUsers[0] != "goneuser1" {
+		t.Errorf("GoneUsers not preserved: got %v, want %v", filtered.GoneUsers, result.GoneUsers)
+	}
+
+	// Check that old stars are filtered out
+	if len(filtered.NewStars) != 1 {
+		t.Fatalf("expected 1 new star, got %d", len(filtered.NewStars))
+	}
+	if filtered.NewStars[0].Username != "octocat" {
+		t.Errorf("wrong star kept: got %s, want octocat", filtered.NewStars[0].Username)
+	}
+
+	// Check that old repos are filtered out
+	if len(filtered.NewRepos) != 1 {
+		t.Fatalf("expected 1 new repo, got %d", len(filtered.NewRepos))
+	}
+	if filtered.NewRepos[0].Username != "user2" {
+		t.Errorf("wrong repo kept: got %s, want user2", filtered.NewRepos[0].Username)
+	}
+
+	// Check that old events are filtered out
+	if len(filtered.NewEvents) != 1 {
+		t.Fatalf("expected 1 new event, got %d", len(filtered.NewEvents))
+	}
+	if filtered.NewEvents[0].Username != "octocat" {
+		t.Errorf("wrong event kept: got %s, want octocat", filtered.NewEvents[0].Username)
+	}
+}
+
+func TestFilterResultBySinceDate_BoundaryConditions(t *testing.T) {
+	sinceDate := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name          string
+		createdAt     time.Time
+		shouldInclude bool
+	}{
+		{
+			name:          "before since date",
+			createdAt:     sinceDate.Add(-24 * time.Hour),
+			shouldInclude: false,
+		},
+		{
+			name:          "exactly on since date",
+			createdAt:     sinceDate,
+			shouldInclude: true,
+		},
+		{
+			name:          "after since date",
+			createdAt:     sinceDate.Add(24 * time.Hour),
+			shouldInclude: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := &diff.Result{
+				NewStars: []diff.RepoChange{
+					{
+						Username: "user",
+						Repo: diff.Repo{
+							Owner:     "user",
+							Name:      "repo",
+							CreatedAt: tt.createdAt,
+						},
+					},
+				},
+			}
+
+			filtered := filterResultBySinceDate(result, sinceDate)
+
+			expectedCount := 0
+			if tt.shouldInclude {
+				expectedCount = 1
+			}
+
+			if len(filtered.NewStars) != expectedCount {
+				t.Errorf("expected %d stars, got %d", expectedCount, len(filtered.NewStars))
+			}
+		})
+	}
+}

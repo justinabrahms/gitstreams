@@ -276,6 +276,21 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 
 	result := diff.Compare(previousSnapshot, currentSnapshot)
 
+	// Filter results by since date if specified
+	// This is needed because snapshots contain historical data (e.g., 30 days),
+	// so we need to filter out activities that occurred before the since date
+	if cfg.Since != "" {
+		sinceDate, err := parseSinceDate(cfg.Since, deps.Now())
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Error parsing --since date for filtering: %v\n", err)
+			return 1
+		}
+		result = filterResultBySinceDate(result, sinceDate)
+		if cfg.Verbose {
+			_, _ = fmt.Fprintf(stdout, "Filtered results to only show activity from %s onwards\n", sinceDate.Format("2006-01-02"))
+		}
+	}
+
 	if cfg.Verbose {
 		_, _ = fmt.Fprintf(stdout, "Diff result: NewStars=%d, NewRepos=%d, NewEvents=%d, NewUsers=%d, GoneUsers=%d\n",
 			len(result.NewStars), len(result.NewRepos), len(result.NewEvents), len(result.NewUsers), len(result.GoneUsers))
@@ -721,6 +736,41 @@ func eventTypeToActivityType(eventType string) report.ActivityType {
 	default:
 		return report.ActivityType(eventType)
 	}
+}
+
+// filterResultBySinceDate filters a diff result to only include activities created on or after the given date.
+// This is necessary when using --since because snapshots contain historical data (e.g., 30 days),
+// and we only want to show activities that occurred after the specified since date.
+func filterResultBySinceDate(result *diff.Result, sinceDate time.Time) *diff.Result {
+	filtered := &diff.Result{
+		OldCapturedAt: result.OldCapturedAt,
+		NewCapturedAt: result.NewCapturedAt,
+		NewUsers:      result.NewUsers,
+		GoneUsers:     result.GoneUsers,
+	}
+
+	// Filter new stars - only include repos created on or after since date
+	for _, star := range result.NewStars {
+		if !star.Repo.CreatedAt.Before(sinceDate) {
+			filtered.NewStars = append(filtered.NewStars, star)
+		}
+	}
+
+	// Filter new repos - only include repos created on or after since date
+	for _, repo := range result.NewRepos {
+		if !repo.Repo.CreatedAt.Before(sinceDate) {
+			filtered.NewRepos = append(filtered.NewRepos, repo)
+		}
+	}
+
+	// Filter new events - only include events created on or after since date
+	for _, event := range result.NewEvents {
+		if !event.Event.CreatedAt.Before(sinceDate) {
+			filtered.NewEvents = append(filtered.NewEvents, event)
+		}
+	}
+
+	return filtered
 }
 
 func formatNotificationMessage(result *diff.Result) string {
