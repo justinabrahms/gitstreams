@@ -41,6 +41,7 @@ gitstreams
 | `-db` | Path to SQLite database (default: `~/.gitstreams/gitstreams.db`) |
 | `-report` | Path to write HTML report (default: temp file) |
 | `-sync-lookback-days` | How far back to fetch GitHub data (1-365 days, default: 30) |
+| `-report-since` | Generate report from historical data starting from this date (e.g., `2026-01-15` or `7d` for 7 days ago) |
 | `-offline` | Skip GitHub API sync and use cached data |
 | `-no-notify` | Skip desktop notification |
 | `-no-open` | Don't open report in browser |
@@ -57,6 +58,12 @@ gitstreams -v -db /path/to/my.db
 
 # Fetch GitHub data from the last 7 days
 gitstreams -sync-lookback-days 7
+
+# Generate report from historical cached data (last 7 days)
+gitstreams -report-since 7d
+
+# Generate report from a specific date using cached data
+gitstreams -report-since 2026-01-15 -offline
 
 # Use cached data without hitting GitHub API (fast, but may be stale)
 gitstreams -offline

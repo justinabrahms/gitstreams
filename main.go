@@ -36,15 +36,15 @@ var (
 
 // Config holds the runtime configuration for gitstreams.
 type Config struct {
-	DBPath     string
-	Token      string
-	ReportPath string
-	Since      string // Generate report from this date (e.g., '2026-01-15' or '7d')
-	Days       int    // How far back to fetch GitHub data (API sync lookback, default 30)
-	NoNotify   bool
-	NoOpen     bool
-	Verbose    bool
-	Offline    bool // Use only cached data, skip GitHub API calls
+	DBPath      string
+	Token       string
+	ReportPath  string
+	ReportSince string // Generate report from this date (e.g., '2026-01-15' or '7d')
+	Days        int    // How far back to fetch GitHub data (API sync lookback, default 30)
+	NoNotify    bool
+	NoOpen      bool
+	Verbose     bool
+	Offline     bool // Use only cached data, skip GitHub API calls
 }
 
 // Dependencies holds injectable dependencies for testing.
@@ -134,11 +134,11 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	var currentSnapshot, previousSnapshot *diff.Snapshot
 
 	// Historical mode: generate report from cached data
-	if cfg.Since != "" {
+	if cfg.ReportSince != "" {
 		var sinceDate time.Time
-		sinceDate, err = parseSinceDate(cfg.Since, deps.Now())
+		sinceDate, err = parseSinceDate(cfg.ReportSince, deps.Now())
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "Error parsing --since date: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "Error parsing --report-since date: %v\n", err)
 			return 1
 		}
 
@@ -150,11 +150,11 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 		var sinceSnapshots []*storage.Snapshot
 		sinceSnapshots, err = store.GetByTimeRange(snapshotUserID, sinceDate.Add(-24*time.Hour), sinceDate.Add(24*time.Hour))
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "Error querying snapshots for --since date: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "Error querying snapshots for --report-since date: %v\n", err)
 			return 1
 		}
 		if len(sinceSnapshots) == 0 {
-			_, _ = fmt.Fprintf(stderr, "No cached snapshot found for date %s (try running without --since first to build cache)\n", sinceDate.Format("2006-01-02"))
+			_, _ = fmt.Fprintf(stderr, "No cached snapshot found for date %s (try running without --report-since first to build cache)\n", sinceDate.Format("2006-01-02"))
 			return 1
 		}
 		previousSnapshot, err = storageToSnapshot(sinceSnapshots[0])
@@ -279,11 +279,11 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	// Filter results by since date if specified
 	// This is needed because snapshots contain historical data (e.g., 30 days),
 	// so we need to filter out activities that occurred before the since date
-	if cfg.Since != "" {
+	if cfg.ReportSince != "" {
 		var filterDate time.Time
-		filterDate, err = parseSinceDate(cfg.Since, deps.Now())
+		filterDate, err = parseSinceDate(cfg.ReportSince, deps.Now())
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "Error parsing --since date for filtering: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "Error parsing --report-since date for filtering: %v\n", err)
 			return 1
 		}
 		result = filterResultBySinceDate(result, filterDate)
@@ -374,7 +374,7 @@ func parseFlags(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.Verbose, "v", false, "Verbose output")
 	fs.BoolVar(&showVersion, "version", false, "Print version and exit")
 	fs.IntVar(&cfg.Days, "sync-lookback-days", 30, "How far back to fetch GitHub data (1-365 days, doesn't affect report filtering)")
-	fs.StringVar(&cfg.Since, "since", "", "Generate report from historical data (e.g., '2026-01-15' or '7d' for 7 days ago)")
+	fs.StringVar(&cfg.ReportSince, "report-since", "", "Generate report from historical data starting from this date (e.g., '2026-01-15' or '7d' for 7 days ago)")
 	fs.BoolVar(&cfg.Offline, "offline", false, "Use only cached data, skip GitHub API calls")
 
 	if err := fs.Parse(args); err != nil {
