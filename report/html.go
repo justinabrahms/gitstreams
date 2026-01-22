@@ -31,6 +31,18 @@ type Activity struct {
 	Details   string
 }
 
+// AggregatedActivity represents multiple similar activities grouped together.
+type AggregatedActivity struct {
+	Type      ActivityType
+	User      string
+	RepoName  string
+	RepoURL   string
+	FirstTime time.Time
+	LastTime  time.Time
+	Count     int
+	Details   string
+}
+
 // UserActivity groups activities by user.
 type UserActivity struct {
 	User       string
@@ -59,6 +71,12 @@ func (r *Report) TotalActivities() int {
 type CategoryGroup struct {
 	Type       ActivityType
 	Activities []Activity
+}
+
+// AggregatedCategoryGroup represents aggregated activities grouped by category.
+type AggregatedCategoryGroup struct {
+	Type       ActivityType
+	Activities []AggregatedActivity
 }
 
 // ActivitiesByCategory groups all activities by their type for category-based display.
@@ -92,6 +110,116 @@ func (r *Report) ActivitiesByCategory() []CategoryGroup {
 		}
 	}
 
+	return result
+}
+
+// aggregateKey returns a unique key for grouping similar activities.
+func aggregateKey(a Activity) string {
+	return fmt.Sprintf("%s|%s|%s", a.User, a.Type, a.RepoName)
+}
+
+// aggregateActivities groups similar activities by (user, type, repo).
+func aggregateActivities(activities []Activity) []AggregatedActivity {
+	if len(activities) == 0 {
+		return nil
+	}
+
+	// Group activities by key
+	groups := make(map[string][]Activity)
+	order := make([]string, 0)
+
+	for _, a := range activities {
+		key := aggregateKey(a)
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], a)
+	}
+
+	// Convert groups to aggregated activities
+	result := make([]AggregatedActivity, 0, len(order))
+	for _, key := range order {
+		group := groups[key]
+		first := group[0]
+
+		// Find time range
+		firstTime := first.Timestamp
+		lastTime := first.Timestamp
+		for _, a := range group {
+			if a.Timestamp.Before(firstTime) {
+				firstTime = a.Timestamp
+			}
+			if a.Timestamp.After(lastTime) {
+				lastTime = a.Timestamp
+			}
+		}
+
+		result = append(result, AggregatedActivity{
+			Type:      first.Type,
+			User:      first.User,
+			RepoName:  first.RepoName,
+			RepoURL:   first.RepoURL,
+			FirstTime: firstTime,
+			LastTime:  lastTime,
+			Count:     len(group),
+			Details:   first.Details,
+		})
+	}
+
+	return result
+}
+
+// AggregatedActivitiesByCategory returns aggregated activities grouped by category.
+func (r *Report) AggregatedActivitiesByCategory() []AggregatedCategoryGroup {
+	groups := make(map[ActivityType][]Activity)
+
+	// Collect all activities by type
+	for _, ua := range r.UserActivities {
+		for _, a := range ua.Activities {
+			groups[a.Type] = append(groups[a.Type], a)
+		}
+	}
+
+	// Order categories in a sensible way
+	order := []ActivityType{
+		ActivityStarred,
+		ActivityCreatedRepo,
+		ActivityForked,
+		ActivityPushed,
+		ActivityPR,
+		ActivityIssue,
+	}
+
+	var result []AggregatedCategoryGroup
+	for _, t := range order {
+		if activities, ok := groups[t]; ok && len(activities) > 0 {
+			result = append(result, AggregatedCategoryGroup{
+				Type:       t,
+				Activities: aggregateActivities(activities),
+			})
+		}
+	}
+
+	return result
+}
+
+// AggregatedUserActivity holds a user's activities in aggregated form.
+type AggregatedUserActivity struct {
+	User       string
+	AvatarURL  string
+	Activities []AggregatedActivity
+}
+
+// AggregatedUserActivities returns user activities with similar events aggregated.
+func (r *Report) AggregatedUserActivities() []AggregatedUserActivity {
+	result := make([]AggregatedUserActivity, 0, len(r.UserActivities))
+	for _, ua := range r.UserActivities {
+		result = append(result, AggregatedUserActivity{
+			User:       ua.User,
+			AvatarURL:  ua.AvatarURL,
+			Activities: aggregateActivities(ua.Activities),
+		})
+	}
 	return result
 }
 
@@ -274,6 +402,76 @@ func activityVerb(t ActivityType) string {
 	default:
 		return "acted on"
 	}
+}
+
+// aggregatedVerb returns a human-readable verb for aggregated activities.
+// When count > 1, includes the count (e.g., "pushed 6 times to").
+func aggregatedVerb(t ActivityType, count int) string {
+	if count <= 1 {
+		return activityVerb(t)
+	}
+
+	switch t {
+	case ActivityStarred:
+		return fmt.Sprintf("starred %d repos including", count)
+	case ActivityCreatedRepo:
+		return fmt.Sprintf("created %d repos including", count)
+	case ActivityForked:
+		return fmt.Sprintf("forked %d repos including", count)
+	case ActivityPushed:
+		return fmt.Sprintf("pushed %d times to", count)
+	case ActivityPR:
+		return fmt.Sprintf("opened %d PRs on", count)
+	case ActivityIssue:
+		return fmt.Sprintf("opened %d issues on", count)
+	default:
+		return fmt.Sprintf("acted %d times on", count)
+	}
+}
+
+// timeRange formats a time range as a human-readable string.
+// If first and last are close together, just shows the relative time.
+// If they span a significant period, shows the range.
+func timeRange(first, last time.Time) string {
+	if first.IsZero() && last.IsZero() {
+		return "unknown time"
+	}
+	if first.IsZero() {
+		return relativeTime(last)
+	}
+	if last.IsZero() || first.Equal(last) {
+		return relativeTime(first)
+	}
+
+	// Calculate duration between first and last
+	duration := last.Sub(first)
+
+	// If less than 1 hour apart, just show the most recent time
+	if duration < time.Hour {
+		return relativeTime(last)
+	}
+
+	// Format the duration
+	now := time.Now()
+	endRelative := relativeTime(last)
+
+	// Calculate how long the activity spanned
+	hours := int(duration.Hours())
+	if hours < 24 {
+		return fmt.Sprintf("%s (over %d hours)", endRelative, hours)
+	}
+
+	days := hours / 24
+	if days == 1 {
+		return fmt.Sprintf("%s (over 1 day)", endRelative)
+	}
+
+	// Check if it spans from a while ago to now
+	if now.Sub(last) < time.Hour {
+		return fmt.Sprintf("over the last %d days", days)
+	}
+
+	return fmt.Sprintf("%s (over %d days)", endRelative, days)
 }
 
 // relativeTime formats a timestamp as a human-readable relative time string.
@@ -681,7 +879,7 @@ const htmlTemplate = `<!DOCTYPE html>
     </div>
 
     <div class="view-category active">
-        {{range .ActivitiesByCategory}}
+        {{range .AggregatedActivitiesByCategory}}
         <div class="category-section">
             <details open>
                 <summary>
@@ -694,8 +892,8 @@ const htmlTemplate = `<!DOCTYPE html>
                     <li class="activity-item{{if isHot .Type}} hot{{end}}">
                         <span class="activity-icon">{{icon .Type}}{{if isHot .Type}}<span class="hot-badge">🔥</span>{{end}}</span>
                         <div class="activity-content">
-                            <span class="activity-user">{{.User}}</span> {{verb .Type}} <a href="{{.RepoURL}}">{{.RepoName}}</a>
-                            <div class="activity-time">{{relTime .Timestamp}}</div>
+                            <span class="activity-user">{{.User}}</span> {{aggVerb .Type .Count}} <a href="{{.RepoURL}}">{{.RepoName}}</a>
+                            <div class="activity-time">{{timeRange .FirstTime .LastTime}}</div>
                             {{if .Details}}<div class="activity-details">{{.Details}}</div>{{end}}
                         </div>
                     </li>
@@ -707,7 +905,7 @@ const htmlTemplate = `<!DOCTYPE html>
     </div>
 
     <div class="view-user">
-        {{range .UserActivities}}
+        {{range .AggregatedUserActivities}}
         <div class="user-section">
             <details open>
                 <summary>
@@ -721,8 +919,8 @@ const htmlTemplate = `<!DOCTYPE html>
                     <li class="activity-item{{if isHot .Type}} hot{{end}}">
                         <span class="activity-icon">{{icon .Type}}{{if isHot .Type}}<span class="hot-badge">🔥</span>{{end}}</span>
                         <div class="activity-content">
-                            <span>{{verb .Type}} <a href="{{.RepoURL}}">{{.RepoName}}</a></span>
-                            <div class="activity-time">{{relTime .Timestamp}}</div>
+                            <span>{{aggVerb .Type .Count}} <a href="{{.RepoURL}}">{{.RepoName}}</a></span>
+                            <div class="activity-time">{{timeRange .FirstTime .LastTime}}</div>
                             {{if .Details}}<div class="activity-details">{{.Details}}</div>{{end}}
                         </div>
                     </li>
@@ -760,12 +958,14 @@ type HTMLGenerator struct {
 // NewHTMLGenerator creates a new HTMLGenerator with the default template.
 func NewHTMLGenerator() (*HTMLGenerator, error) {
 	funcMap := template.FuncMap{
-		"icon":         activityIcon,
-		"verb":         activityVerb,
-		"isHot":        isHot,
-		"tagline":      tagline,
-		"categoryName": categoryName,
-		"relTime":      relativeTime,
+		"icon":           activityIcon,
+		"verb":           activityVerb,
+		"aggVerb":        aggregatedVerb,
+		"isHot":          isHot,
+		"tagline":        tagline,
+		"categoryName":   categoryName,
+		"relTime":        relativeTime,
+		"timeRange":      timeRange,
 	}
 
 	tmpl, err := template.New("report").Funcs(funcMap).Parse(htmlTemplate)
