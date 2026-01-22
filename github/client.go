@@ -8,7 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -281,78 +283,140 @@ func (c *Client) parseRateLimitHeaders(resp *http.Response) {
 	}
 }
 
+// getPaginated fetches all pages of results for a given path.
+// It handles GitHub's pagination by requesting 100 items per page until
+// no more results are returned.
+func (c *Client) getPaginated(ctx context.Context, basePath string, result any) error {
+	// Use reflection to work with any slice type
+	resultVal := reflect.ValueOf(result)
+	if resultVal.Kind() != reflect.Ptr || resultVal.Elem().Kind() != reflect.Slice {
+		return fmt.Errorf("result must be a pointer to a slice")
+	}
+
+	sliceVal := resultVal.Elem()
+
+	page := 1
+	perPage := 100 // GitHub's maximum per_page value
+
+	for {
+		// Build path with pagination parameters
+		separator := "?"
+		if strings.Contains(basePath, "?") {
+			separator = "&"
+		}
+		path := fmt.Sprintf("%s%spage=%d&per_page=%d", basePath, separator, page, perPage)
+
+		// Create a new slice to hold this page's results
+		pageResult := reflect.New(sliceVal.Type()).Interface()
+
+		if err := c.get(ctx, path, pageResult); err != nil {
+			return err
+		}
+
+		// Get the slice value from the pointer
+		pageSlice := reflect.ValueOf(pageResult).Elem()
+
+		// If we got no results, we're done
+		if pageSlice.Len() == 0 {
+			break
+		}
+
+		// Append this page's results to the total
+		sliceVal = reflect.AppendSlice(sliceVal, pageSlice)
+
+		// If we got fewer results than per_page, this is the last page
+		if pageSlice.Len() < perPage {
+			break
+		}
+
+		page++
+	}
+
+	// Set the final result
+	resultVal.Elem().Set(sliceVal)
+	return nil
+}
+
 // GetFollowedUsers returns the users that the authenticated user follows.
+// This method automatically handles pagination to fetch all followed users.
 func (c *Client) GetFollowedUsers(ctx context.Context) ([]User, error) {
 	var users []User
-	if err := c.get(ctx, "/user/following", &users); err != nil {
+	if err := c.getPaginated(ctx, "/user/following", &users); err != nil {
 		return nil, fmt.Errorf("fetching followed users: %w", err)
 	}
 	return users, nil
 }
 
 // GetFollowedUsersByUsername returns the users that a specific user follows.
+// This method automatically handles pagination to fetch all followed users.
 func (c *Client) GetFollowedUsersByUsername(ctx context.Context, username string) ([]User, error) {
 	var users []User
 	path := fmt.Sprintf("/users/%s/following", username)
-	if err := c.get(ctx, path, &users); err != nil {
+	if err := c.getPaginated(ctx, path, &users); err != nil {
 		return nil, fmt.Errorf("fetching users followed by %s: %w", username, err)
 	}
 	return users, nil
 }
 
 // GetStarredRepos returns repositories starred by the authenticated user.
+// This method automatically handles pagination to fetch all starred repos.
 func (c *Client) GetStarredRepos(ctx context.Context) ([]Repository, error) {
 	var repos []Repository
-	if err := c.get(ctx, "/user/starred", &repos); err != nil {
+	if err := c.getPaginated(ctx, "/user/starred", &repos); err != nil {
 		return nil, fmt.Errorf("fetching starred repos: %w", err)
 	}
 	return repos, nil
 }
 
 // GetStarredReposByUsername returns repositories starred by a specific user.
+// This method automatically handles pagination to fetch all starred repos.
 func (c *Client) GetStarredReposByUsername(ctx context.Context, username string) ([]Repository, error) {
 	var repos []Repository
 	path := fmt.Sprintf("/users/%s/starred", username)
-	if err := c.get(ctx, path, &repos); err != nil {
+	if err := c.getPaginated(ctx, path, &repos); err != nil {
 		return nil, fmt.Errorf("fetching repos starred by %s: %w", username, err)
 	}
 	return repos, nil
 }
 
 // GetOwnedRepos returns repositories owned by the authenticated user.
+// This method automatically handles pagination to fetch all owned repos.
 func (c *Client) GetOwnedRepos(ctx context.Context) ([]Repository, error) {
 	var repos []Repository
-	if err := c.get(ctx, "/user/repos?type=owner", &repos); err != nil {
+	if err := c.getPaginated(ctx, "/user/repos?type=owner", &repos); err != nil {
 		return nil, fmt.Errorf("fetching owned repos: %w", err)
 	}
 	return repos, nil
 }
 
 // GetOwnedReposByUsername returns repositories owned by a specific user.
+// This method automatically handles pagination to fetch all owned repos.
 func (c *Client) GetOwnedReposByUsername(ctx context.Context, username string) ([]Repository, error) {
 	var repos []Repository
 	path := fmt.Sprintf("/users/%s/repos?type=owner", username)
-	if err := c.get(ctx, path, &repos); err != nil {
+	if err := c.getPaginated(ctx, path, &repos); err != nil {
 		return nil, fmt.Errorf("fetching repos owned by %s: %w", username, err)
 	}
 	return repos, nil
 }
 
 // GetRecentEvents returns recent events for the authenticated user.
+// This method automatically handles pagination to fetch all recent events.
 func (c *Client) GetRecentEvents(ctx context.Context, username string) ([]Event, error) {
 	var events []Event
 	path := fmt.Sprintf("/users/%s/events", username)
-	if err := c.get(ctx, path, &events); err != nil {
+	if err := c.getPaginated(ctx, path, &events); err != nil {
 		return nil, fmt.Errorf("fetching events for %s: %w", username, err)
 	}
 	return events, nil
 }
 
 // GetReceivedEvents returns events received by a user (their feed).
+// This method automatically handles pagination to fetch all received events.
 func (c *Client) GetReceivedEvents(ctx context.Context, username string) ([]Event, error) {
 	var events []Event
 	path := fmt.Sprintf("/users/%s/received_events", username)
-	if err := c.get(ctx, path, &events); err != nil {
+	if err := c.getPaginated(ctx, path, &events); err != nil {
 		return nil, fmt.Errorf("fetching received events for %s: %w", username, err)
 	}
 	return events, nil
