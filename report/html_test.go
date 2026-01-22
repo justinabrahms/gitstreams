@@ -295,3 +295,149 @@ func TestActivityTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestCategoryName(t *testing.T) {
+	tests := []struct {
+		activityType ActivityType
+		want         string
+	}{
+		{ActivityStarred, "New Stars"},
+		{ActivityCreatedRepo, "Repos Created"},
+		{ActivityForked, "Forks"},
+		{ActivityPushed, "Recent Pushes"},
+		{ActivityPR, "Pull Requests"},
+		{ActivityIssue, "Issues Opened"},
+		{ActivityType("unknown"), "Other Activity"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.activityType), func(t *testing.T) {
+			got := categoryName(tt.activityType)
+			if got != tt.want {
+				t.Errorf("categoryName(%q) = %q, want %q", tt.activityType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReportActivitiesByCategory(t *testing.T) {
+	now := time.Now()
+	report := &Report{
+		GeneratedAt: now,
+		PeriodStart: now.AddDate(0, 0, -7),
+		PeriodEnd:   now,
+		UserActivities: []UserActivity{
+			{
+				User: "alice",
+				Activities: []Activity{
+					{Type: ActivityStarred, User: "alice", RepoName: "repo1"},
+					{Type: ActivityStarred, User: "alice", RepoName: "repo2"},
+					{Type: ActivityPushed, User: "alice", RepoName: "repo3"},
+				},
+			},
+			{
+				User: "bob",
+				Activities: []Activity{
+					{Type: ActivityStarred, User: "bob", RepoName: "repo4"},
+					{Type: ActivityCreatedRepo, User: "bob", RepoName: "repo5"},
+				},
+			},
+		},
+	}
+
+	categories := report.ActivitiesByCategory()
+
+	// Should have 3 categories: starred, created_repo, pushed
+	if len(categories) != 3 {
+		t.Errorf("ActivitiesByCategory() returned %d categories, want 3", len(categories))
+	}
+
+	// First category should be starred (order defined in ActivitiesByCategory)
+	if categories[0].Type != ActivityStarred {
+		t.Errorf("First category type = %q, want %q", categories[0].Type, ActivityStarred)
+	}
+	if len(categories[0].Activities) != 3 {
+		t.Errorf("Starred activities count = %d, want 3", len(categories[0].Activities))
+	}
+
+	// Second should be created_repo
+	if categories[1].Type != ActivityCreatedRepo {
+		t.Errorf("Second category type = %q, want %q", categories[1].Type, ActivityCreatedRepo)
+	}
+	if len(categories[1].Activities) != 1 {
+		t.Errorf("CreatedRepo activities count = %d, want 1", len(categories[1].Activities))
+	}
+
+	// Third should be pushed
+	if categories[2].Type != ActivityPushed {
+		t.Errorf("Third category type = %q, want %q", categories[2].Type, ActivityPushed)
+	}
+	if len(categories[2].Activities) != 1 {
+		t.Errorf("Pushed activities count = %d, want 1", len(categories[2].Activities))
+	}
+}
+
+func TestReportActivitiesByCategoryEmpty(t *testing.T) {
+	report := &Report{}
+	categories := report.ActivitiesByCategory()
+
+	if len(categories) != 0 {
+		t.Errorf("ActivitiesByCategory() on empty report returned %d categories, want 0", len(categories))
+	}
+}
+
+func TestHTMLGeneratorGenerateCategoryView(t *testing.T) {
+	gen, err := NewHTMLGenerator()
+	if err != nil {
+		t.Fatalf("NewHTMLGenerator() error = %v", err)
+	}
+
+	now := time.Date(2024, 1, 15, 14, 30, 0, 0, time.UTC)
+	report := &Report{
+		GeneratedAt: now,
+		PeriodStart: now.AddDate(0, 0, -7),
+		PeriodEnd:   now,
+		UserActivities: []UserActivity{
+			{
+				User: "alice",
+				Activities: []Activity{
+					{Type: ActivityStarred, User: "alice", RepoName: "repo1", RepoURL: "https://github.com/repo1", Timestamp: now},
+					{Type: ActivityPushed, User: "alice", RepoName: "repo2", RepoURL: "https://github.com/repo2", Timestamp: now},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err = gen.Generate(&buf, report)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	html := buf.String()
+
+	// Check for category view elements
+	checks := []struct {
+		name     string
+		contains string
+	}{
+		{"category toggle button", `onclick="toggleView('category')"`},
+		{"user toggle button", `onclick="toggleView('user')"`},
+		{"category section", `class="category-section"`},
+		{"category title stars", "New Stars"},
+		{"category title pushes", "Recent Pushes"},
+		{"collapsible details", "<details open>"},
+		{"summary element", "<summary>"},
+		{"view toggle script", "function toggleView"},
+		{"summary grid", `class="summary-grid"`},
+		{"summary stat", `class="summary-stat"`},
+	}
+
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			if !strings.Contains(html, check.contains) {
+				t.Errorf("HTML should contain %q", check.contains)
+			}
+		})
+	}
+}
