@@ -11,7 +11,7 @@ func main() {
 }
 
 func run(w io.Writer) {
-	fmt.Fprintln(w, greeting())
+	_, _ = fmt.Fprintln(w, greeting())
 }
 
 func greeting() string {
