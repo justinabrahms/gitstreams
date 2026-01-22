@@ -27,6 +27,13 @@ const (
 	activityDataKey = "snapshot_data"
 )
 
+// Version info set via ldflags at build time.
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 // Config holds the runtime configuration for gitstreams.
 type Config struct {
 	DBPath     string
@@ -99,6 +106,10 @@ func main() {
 func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	cfg, err := parseFlags(args)
 	if err != nil {
+		if err == errVersion {
+			_, _ = fmt.Fprintf(stdout, "gitstreams %s (commit: %s, built: %s)\n", version, commit, date)
+			return 0
+		}
 		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
@@ -209,8 +220,12 @@ func run(stdout, stderr io.Writer, args []string, deps *Dependencies) int {
 	return 0
 }
 
+// errVersion is a sentinel error indicating -version was requested.
+var errVersion = fmt.Errorf("version requested")
+
 func parseFlags(args []string) (*Config, error) {
 	cfg := &Config{}
+	var showVersion bool
 
 	fs := flag.NewFlagSet("gitstreams", flag.ContinueOnError)
 	fs.StringVar(&cfg.DBPath, "db", "", "Path to SQLite database (default: ~/.gitstreams/gitstreams.db)")
@@ -219,9 +234,14 @@ func parseFlags(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.NoOpen, "no-open", false, "Don't open report in browser")
 	fs.StringVar(&cfg.ReportPath, "report", "", "Path to write HTML report (default: temp file)")
 	fs.BoolVar(&cfg.Verbose, "v", false, "Verbose output")
+	fs.BoolVar(&showVersion, "version", false, "Print version and exit")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
+	}
+
+	if showVersion {
+		return nil, errVersion
 	}
 
 	// Default token from environment
