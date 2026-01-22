@@ -318,6 +318,7 @@ func fetchActivity(ctx context.Context, client GitHubClient, now time.Time, w, p
 
 func convertRepo(r github.Repository) diff.Repo {
 	return diff.Repo{
+		CreatedAt:   r.CreatedAt,
 		Owner:       r.Owner.Login,
 		Name:        r.Name,
 		Description: r.Description,

@@ -31,16 +31,18 @@ type User struct {
 
 // Repository represents a GitHub repository.
 type Repository struct {
-	Name        string `json:"name"`
-	FullName    string `json:"full_name"`
-	Description string `json:"description"`
-	HTMLURL     string `json:"html_url"`
-	Language    string `json:"language"`
-	Owner       User   `json:"owner"`
-	ID          int64  `json:"id"`
-	StarCount   int    `json:"stargazers_count"`
-	ForkCount   int    `json:"forks_count"`
-	Private     bool   `json:"private"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Name        string    `json:"name"`
+	FullName    string    `json:"full_name"`
+	Description string    `json:"description"`
+	HTMLURL     string    `json:"html_url"`
+	Language    string    `json:"language"`
+	Owner       User      `json:"owner"`
+	ID          int64     `json:"id"`
+	StarCount   int       `json:"stargazers_count"`
+	ForkCount   int       `json:"forks_count"`
+	Private     bool      `json:"private"`
 }
 
 // Event represents a GitHub event.
