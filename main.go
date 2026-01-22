@@ -632,6 +632,7 @@ func buildReportWithLogging(result *diff.Result, periodStart, periodEnd, generat
 		ua.Activities = append(ua.Activities, report.Activity{
 			Type:      report.ActivityStarred,
 			User:      star.Username,
+			AvatarURL: ua.AvatarURL,
 			RepoName:  star.Repo.FullName(),
 			RepoURL:   fmt.Sprintf("https://github.com/%s", star.Repo.FullName()),
 			Timestamp: star.Repo.CreatedAt,
@@ -649,6 +650,7 @@ func buildReportWithLogging(result *diff.Result, periodStart, periodEnd, generat
 		ua.Activities = append(ua.Activities, report.Activity{
 			Type:      report.ActivityCreatedRepo,
 			User:      repo.Username,
+			AvatarURL: ua.AvatarURL,
 			RepoName:  repo.Repo.FullName(),
 			RepoURL:   fmt.Sprintf("https://github.com/%s", repo.Repo.FullName()),
 			Timestamp: repo.Repo.CreatedAt,
@@ -667,6 +669,7 @@ func buildReportWithLogging(result *diff.Result, periodStart, periodEnd, generat
 		ua.Activities = append(ua.Activities, report.Activity{
 			Type:      activityType,
 			User:      event.Username,
+			AvatarURL: ua.AvatarURL,
 			RepoName:  event.Event.Repo,
 			RepoURL:   fmt.Sprintf("https://github.com/%s", event.Event.Repo),
 			Timestamp: event.Event.CreatedAt,
