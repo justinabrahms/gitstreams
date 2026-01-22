@@ -2,23 +2,788 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/justinabrahms/gitstreams/diff"
+	"github.com/justinabrahms/gitstreams/github"
+	"github.com/justinabrahms/gitstreams/notify"
+	"github.com/justinabrahms/gitstreams/report"
+	"github.com/justinabrahms/gitstreams/storage"
 )
 
-func TestGreeting(t *testing.T) {
-	got := greeting()
-	want := "Hello, gitstreams!"
-	if got != want {
-		t.Errorf("greeting() = %q, want %q", got, want)
+// mockGitHubClient implements GitHubClient for testing.
+type mockGitHubClient struct {
+	followedErr   error
+	starredRepos  map[string][]github.Repository
+	ownedRepos    map[string][]github.Repository
+	events        map[string][]github.Event
+	starredErr    map[string]error
+	ownedErr      map[string]error
+	eventsErr     map[string]error
+	followedUsers []github.User
+}
+
+func (m *mockGitHubClient) GetFollowedUsers(ctx context.Context) ([]github.User, error) {
+	return m.followedUsers, m.followedErr
+}
+
+func (m *mockGitHubClient) GetStarredReposByUsername(ctx context.Context, username string) ([]github.Repository, error) {
+	if m.starredErr != nil {
+		if err, ok := m.starredErr[username]; ok {
+			return nil, err
+		}
+	}
+	return m.starredRepos[username], nil
+}
+
+func (m *mockGitHubClient) GetOwnedReposByUsername(ctx context.Context, username string) ([]github.Repository, error) {
+	if m.ownedErr != nil {
+		if err, ok := m.ownedErr[username]; ok {
+			return nil, err
+		}
+	}
+	return m.ownedRepos[username], nil
+}
+
+func (m *mockGitHubClient) GetRecentEvents(ctx context.Context, username string) ([]github.Event, error) {
+	if m.eventsErr != nil {
+		if err, ok := m.eventsErr[username]; ok {
+			return nil, err
+		}
+	}
+	return m.events[username], nil
+}
+
+// mockStore implements Store for testing.
+type mockStore struct {
+	saveErr       error
+	getErr        error
+	savedSnapshot *storage.Snapshot
+	snapshots     []*storage.Snapshot
+	savedCalled   bool
+	closeCalled   bool
+}
+
+func (m *mockStore) Save(snapshot *storage.Snapshot) error {
+	m.savedCalled = true
+	m.savedSnapshot = snapshot
+	return m.saveErr
+}
+
+func (m *mockStore) GetByUser(userID string, limit int) ([]*storage.Snapshot, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	return m.snapshots, nil
+}
+
+func (m *mockStore) Close() error {
+	m.closeCalled = true
+	return nil
+}
+
+// mockNotifier implements Notifier for testing.
+type mockNotifier struct {
+	sentNotification *notify.Notification
+	sendErr          error
+}
+
+func (m *mockNotifier) Send(n notify.Notification) error {
+	m.sentNotification = &n
+	return m.sendErr
+}
+
+// mockReportGenerator implements ReportGenerator for testing.
+type mockReportGenerator struct {
+	generatedReport *report.Report
+	generateErr     error
+}
+
+func (m *mockReportGenerator) Generate(w io.Writer, r *report.Report) error {
+	m.generatedReport = r
+	if m.generateErr != nil {
+		return m.generateErr
+	}
+	_, err := w.Write([]byte("<html>mock report</html>"))
+	return err
+}
+
+func fixedTime() time.Time {
+	return time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+}
+
+func TestRun_MissingToken(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	// Unset GITHUB_TOKEN for this test
+	t.Setenv("GITHUB_TOKEN", "")
+
+	deps := DefaultDependencies()
+	result := run(&stdout, &stderr, []string{}, deps)
+
+	if result != 1 {
+		t.Errorf("expected exit code 1, got %d", result)
+	}
+	if !strings.Contains(stderr.String(), "GITHUB_TOKEN") {
+		t.Errorf("expected error about GITHUB_TOKEN, got: %s", stderr.String())
 	}
 }
 
-func TestRun(t *testing.T) {
-	var buf bytes.Buffer
-	run(&buf)
-	got := buf.String()
-	want := "Hello, gitstreams!\n"
-	if got != want {
-		t.Errorf("run() output = %q, want %q", got, want)
+func TestRun_SuccessfulRun_NoChanges(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{
+			{Login: "testuser", ID: 1},
+		},
+		starredRepos: map[string][]github.Repository{
+			"testuser": {
+				{Name: "repo1", Owner: github.User{Login: "owner1"}},
+			},
+		},
+		ownedRepos: map[string][]github.Repository{},
+		events:     map[string][]github.Event{},
+	}
+
+	// Create a previous snapshot with the same data (no changes)
+	prevSnapshot := diff.NewSnapshot(fixedTime().Add(-24 * time.Hour))
+	prevSnapshot.Users["testuser"] = diff.UserActivity{
+		Username: "testuser",
+		StarredRepos: []diff.Repo{
+			{Owner: "owner1", Name: "repo1"},
+		},
+	}
+
+	mockStoreInst := &mockStore{}
+	// Convert prevSnapshot to storage format for the mock
+	ss, _ := snapshotToStorage(prevSnapshot)
+	mockStoreInst.snapshots = []*storage.Snapshot{ss}
+
+	mockNotifierInst := &mockNotifier{}
+	mockGenInst := &mockReportGenerator{}
+
+	browserOpened := false
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient { return mockClient },
+		StoreFactory:        func(dbPath string) (Store, error) { return mockStoreInst, nil },
+		NotifierFactory:     func() Notifier { return mockNotifierInst },
+		ReportGenerator:     func() (ReportGenerator, error) { return mockGenInst, nil },
+		OpenBrowser:         func(url string) error { browserOpened = true; return nil },
+		Now:                 fixedTime,
+	}
+
+	result := run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-db", filepath.Join(tmpDir, "test.db"),
+		"-no-notify",
+		"-no-open",
+	}, deps)
+
+	if result != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", result, stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), "No new activity") {
+		t.Errorf("expected 'No new activity' message, got: %s", stdout.String())
+	}
+
+	if browserOpened {
+		t.Error("browser should not have been opened when there are no changes")
+	}
+}
+
+func TestRun_SuccessfulRun_WithChanges(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{
+			{Login: "testuser", ID: 1},
+		},
+		starredRepos: map[string][]github.Repository{
+			"testuser": {
+				{Name: "new-repo", Owner: github.User{Login: "owner1"}, Description: "A new repo"},
+			},
+		},
+		ownedRepos: map[string][]github.Repository{},
+		events:     map[string][]github.Event{},
+	}
+
+	// Empty previous snapshot (all current data is "new")
+	mockStoreInst := &mockStore{
+		snapshots: []*storage.Snapshot{},
+	}
+
+	mockNotifierInst := &mockNotifier{}
+	mockGenInst := &mockReportGenerator{}
+
+	browserOpened := false
+	reportPath := filepath.Join(tmpDir, "report.html")
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient { return mockClient },
+		StoreFactory:        func(dbPath string) (Store, error) { return mockStoreInst, nil },
+		NotifierFactory:     func() Notifier { return mockNotifierInst },
+		ReportGenerator:     func() (ReportGenerator, error) { return mockGenInst, nil },
+		OpenBrowser:         func(url string) error { browserOpened = true; return nil },
+		Now:                 fixedTime,
+	}
+
+	result := run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-db", filepath.Join(tmpDir, "test.db"),
+		"-report", reportPath,
+	}, deps)
+
+	if result != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", result, stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), "Report written to") {
+		t.Errorf("expected 'Report written to' message, got: %s", stdout.String())
+	}
+
+	if !browserOpened {
+		t.Error("browser should have been opened")
+	}
+
+	if mockNotifierInst.sentNotification == nil {
+		t.Error("notification should have been sent")
+	} else {
+		if mockNotifierInst.sentNotification.Title != "GitStreams" {
+			t.Errorf("expected notification title 'GitStreams', got: %s", mockNotifierInst.sentNotification.Title)
+		}
+	}
+
+	if mockGenInst.generatedReport == nil {
+		t.Error("report should have been generated")
+	}
+
+	if !mockStoreInst.savedCalled {
+		t.Error("snapshot should have been saved")
+	}
+}
+
+func TestRun_GitHubAPIError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	mockClient := &mockGitHubClient{
+		followedErr: errors.New("GitHub API error"),
+	}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient { return mockClient },
+		StoreFactory:        func(dbPath string) (Store, error) { return &mockStore{}, nil },
+		NotifierFactory:     func() Notifier { return &mockNotifier{} },
+		ReportGenerator:     func() (ReportGenerator, error) { return &mockReportGenerator{}, nil },
+		OpenBrowser:         func(url string) error { return nil },
+		Now:                 fixedTime,
+	}
+
+	result := run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-db", filepath.Join(tmpDir, "test.db"),
+	}, deps)
+
+	if result != 1 {
+		t.Errorf("expected exit code 1, got %d", result)
+	}
+
+	if !strings.Contains(stderr.String(), "fetching activity") {
+		t.Errorf("expected error about fetching activity, got: %s", stderr.String())
+	}
+}
+
+func TestRun_StoreError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient {
+			return &mockGitHubClient{followedUsers: []github.User{{Login: "test"}}}
+		},
+		StoreFactory: func(dbPath string) (Store, error) {
+			return nil, errors.New("database error")
+		},
+		NotifierFactory: func() Notifier { return &mockNotifier{} },
+		ReportGenerator: func() (ReportGenerator, error) { return &mockReportGenerator{}, nil },
+		OpenBrowser:     func(url string) error { return nil },
+		Now:             fixedTime,
+	}
+
+	result := run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-db", "/some/path.db",
+	}, deps)
+
+	if result != 1 {
+		t.Errorf("expected exit code 1, got %d", result)
+	}
+
+	if !strings.Contains(stderr.String(), "opening database") {
+		t.Errorf("expected error about database, got: %s", stderr.String())
+	}
+}
+
+func TestParseFlags(t *testing.T) {
+	tests := []struct {
+		check    func(*testing.T, *Config)
+		name     string
+		envToken string
+		args     []string
+		wantErr  bool
+	}{
+		{
+			name:     "defaults with env token",
+			args:     []string{},
+			envToken: "env-token",
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.Token != "env-token" {
+					t.Errorf("expected token from env, got: %s", cfg.Token)
+				}
+				if cfg.Verbose {
+					t.Error("verbose should be false by default")
+				}
+			},
+		},
+		{
+			name:     "explicit token overrides env",
+			args:     []string{"-token", "explicit-token"},
+			envToken: "env-token",
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.Token != "explicit-token" {
+					t.Errorf("expected explicit token, got: %s", cfg.Token)
+				}
+			},
+		},
+		{
+			name:     "verbose flag",
+			args:     []string{"-v"},
+			envToken: "token",
+			check: func(t *testing.T, cfg *Config) {
+				if !cfg.Verbose {
+					t.Error("verbose should be true")
+				}
+			},
+		},
+		{
+			name:     "no-notify flag",
+			args:     []string{"-no-notify"},
+			envToken: "token",
+			check: func(t *testing.T, cfg *Config) {
+				if !cfg.NoNotify {
+					t.Error("NoNotify should be true")
+				}
+			},
+		},
+		{
+			name:     "no-open flag",
+			args:     []string{"-no-open"},
+			envToken: "token",
+			check: func(t *testing.T, cfg *Config) {
+				if !cfg.NoOpen {
+					t.Error("NoOpen should be true")
+				}
+			},
+		},
+		{
+			name:     "custom db path",
+			args:     []string{"-db", "/custom/path.db"},
+			envToken: "token",
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.DBPath != "/custom/path.db" {
+					t.Errorf("expected custom db path, got: %s", cfg.DBPath)
+				}
+			},
+		},
+		{
+			name:     "custom report path",
+			args:     []string{"-report", "/custom/report.html"},
+			envToken: "token",
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.ReportPath != "/custom/report.html" {
+					t.Errorf("expected custom report path, got: %s", cfg.ReportPath)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GITHUB_TOKEN", tt.envToken)
+
+			cfg, err := parseFlags(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseFlags() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && tt.check != nil {
+				tt.check(t, cfg)
+			}
+		})
+	}
+}
+
+func TestConvertRepo(t *testing.T) {
+	ghRepo := github.Repository{
+		Name:        "test-repo",
+		Description: "A test repository",
+		Language:    "Go",
+		StarCount:   100,
+		Owner:       github.User{Login: "owner"},
+	}
+
+	diffRepo := convertRepo(ghRepo)
+
+	if diffRepo.Name != "test-repo" {
+		t.Errorf("expected name 'test-repo', got: %s", diffRepo.Name)
+	}
+	if diffRepo.Owner != "owner" {
+		t.Errorf("expected owner 'owner', got: %s", diffRepo.Owner)
+	}
+	if diffRepo.Description != "A test repository" {
+		t.Errorf("expected description, got: %s", diffRepo.Description)
+	}
+	if diffRepo.Language != "Go" {
+		t.Errorf("expected language 'Go', got: %s", diffRepo.Language)
+	}
+	if diffRepo.Stars != 100 {
+		t.Errorf("expected 100 stars, got: %d", diffRepo.Stars)
+	}
+}
+
+func TestConvertEvent(t *testing.T) {
+	eventTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ghEvent := github.Event{
+		Type:      "PushEvent",
+		Actor:     github.User{Login: "actor"},
+		Repo:      github.EventRepo{Name: "owner/repo"},
+		CreatedAt: eventTime,
+	}
+
+	diffEvent := convertEvent(ghEvent)
+
+	if diffEvent.Type != "PushEvent" {
+		t.Errorf("expected type 'PushEvent', got: %s", diffEvent.Type)
+	}
+	if diffEvent.Actor != "actor" {
+		t.Errorf("expected actor 'actor', got: %s", diffEvent.Actor)
+	}
+	if diffEvent.Repo != "owner/repo" {
+		t.Errorf("expected repo 'owner/repo', got: %s", diffEvent.Repo)
+	}
+	if !diffEvent.CreatedAt.Equal(eventTime) {
+		t.Errorf("expected time %v, got: %v", eventTime, diffEvent.CreatedAt)
+	}
+}
+
+func TestEventTypeToActivityType(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected report.ActivityType
+	}{
+		{"WatchEvent", report.ActivityStarred},
+		{"CreateEvent", report.ActivityCreatedRepo},
+		{"ForkEvent", report.ActivityForked},
+		{"PushEvent", report.ActivityPushed},
+		{"PullRequestEvent", report.ActivityPR},
+		{"IssuesEvent", report.ActivityIssue},
+		{"UnknownEvent", report.ActivityType("UnknownEvent")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := eventTypeToActivityType(tt.input)
+			if result != tt.expected {
+				t.Errorf("eventTypeToActivityType(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormatNotificationMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   *diff.Result
+		expected string
+	}{
+		{
+			name:     "empty result",
+			result:   &diff.Result{},
+			expected: "New activity detected",
+		},
+		{
+			name: "only stars",
+			result: &diff.Result{
+				NewStars: []diff.RepoChange{{}, {}},
+			},
+			expected: "2 new stars",
+		},
+		{
+			name: "stars and repos",
+			result: &diff.Result{
+				NewStars: []diff.RepoChange{{}},
+				NewRepos: []diff.RepoChange{{}, {}, {}},
+			},
+			expected: "1 new stars and 3 new repos",
+		},
+		{
+			name: "all types",
+			result: &diff.Result{
+				NewStars:  []diff.RepoChange{{}},
+				NewRepos:  []diff.RepoChange{{}, {}},
+				NewEvents: []diff.EventChange{{}, {}, {}, {}},
+				NewUsers:  []string{"user1"},
+			},
+			expected: "1 new stars, 2 new repos, 4 events and 1 new users",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatNotificationMessage(tt.result)
+			if result != tt.expected {
+				t.Errorf("formatNotificationMessage() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSnapshotRoundTrip(t *testing.T) {
+	original := diff.NewSnapshot(fixedTime())
+	original.Users["user1"] = diff.UserActivity{
+		Username: "user1",
+		StarredRepos: []diff.Repo{
+			{Owner: "owner", Name: "repo1", Description: "desc", Language: "Go", Stars: 10},
+		},
+		OwnedRepos: []diff.Repo{
+			{Owner: "user1", Name: "myrepo"},
+		},
+		Events: []diff.Event{
+			{Type: "PushEvent", Actor: "user1", Repo: "user1/myrepo", CreatedAt: fixedTime()},
+		},
+	}
+
+	// Convert to storage format
+	stored, err := snapshotToStorage(original)
+	if err != nil {
+		t.Fatalf("snapshotToStorage failed: %v", err)
+	}
+
+	if stored.UserID != snapshotUserID {
+		t.Errorf("expected userID %q, got %q", snapshotUserID, stored.UserID)
+	}
+
+	// Convert back
+	restored, err := storageToSnapshot(stored)
+	if err != nil {
+		t.Fatalf("storageToSnapshot failed: %v", err)
+	}
+
+	// Verify data
+	if len(restored.Users) != 1 {
+		t.Fatalf("expected 1 user, got %d", len(restored.Users))
+	}
+
+	user, ok := restored.Users["user1"]
+	if !ok {
+		t.Fatal("user1 not found in restored snapshot")
+	}
+
+	if user.Username != "user1" {
+		t.Errorf("expected username 'user1', got %q", user.Username)
+	}
+
+	if len(user.StarredRepos) != 1 {
+		t.Errorf("expected 1 starred repo, got %d", len(user.StarredRepos))
+	}
+
+	if len(user.OwnedRepos) != 1 {
+		t.Errorf("expected 1 owned repo, got %d", len(user.OwnedRepos))
+	}
+
+	if len(user.Events) != 1 {
+		t.Errorf("expected 1 event, got %d", len(user.Events))
+	}
+}
+
+func TestBuildReport(t *testing.T) {
+	result := &diff.Result{
+		OldCapturedAt: fixedTime().Add(-24 * time.Hour),
+		NewCapturedAt: fixedTime(),
+		NewStars: []diff.RepoChange{
+			{Username: "user1", Repo: diff.Repo{Owner: "owner", Name: "starred-repo", Description: "A repo"}},
+		},
+		NewRepos: []diff.RepoChange{
+			{Username: "user1", Repo: diff.Repo{Owner: "user1", Name: "new-repo"}},
+		},
+		NewEvents: []diff.EventChange{
+			{Username: "user2", Event: diff.Event{Type: "PushEvent", Repo: "user2/repo", CreatedAt: fixedTime()}},
+		},
+	}
+
+	rpt := buildReport(result, result.OldCapturedAt, result.NewCapturedAt, fixedTime())
+
+	if rpt.TotalActivities() != 3 {
+		t.Errorf("expected 3 total activities, got %d", rpt.TotalActivities())
+	}
+
+	if len(rpt.UserActivities) != 2 {
+		t.Errorf("expected 2 users with activities, got %d", len(rpt.UserActivities))
+	}
+}
+
+func TestFetchActivity_VerboseOutput(t *testing.T) {
+	var stdout bytes.Buffer
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{
+			{Login: "user1"},
+		},
+		starredRepos: map[string][]github.Repository{},
+		ownedRepos:   map[string][]github.Repository{},
+		events:       map[string][]github.Event{},
+	}
+
+	ctx := context.Background()
+	_, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, true)
+	if err != nil {
+		t.Fatalf("fetchActivity failed: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "Fetching activity for user1") {
+		t.Errorf("expected verbose output about user1, got: %s", stdout.String())
+	}
+}
+
+func TestFetchActivity_HandlesPartialErrors(t *testing.T) {
+	var stdout bytes.Buffer
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{
+			{Login: "user1"},
+		},
+		starredRepos: map[string][]github.Repository{},
+		ownedRepos:   map[string][]github.Repository{},
+		events:       map[string][]github.Event{},
+		starredErr: map[string]error{
+			"user1": errors.New("rate limited"),
+		},
+	}
+
+	ctx := context.Background()
+	snapshot, err := fetchActivity(ctx, mockClient, fixedTime(), &stdout, true)
+	if err != nil {
+		t.Fatalf("fetchActivity should not fail on partial errors: %v", err)
+	}
+
+	// User should still be in snapshot even if starred repos failed
+	if _, ok := snapshot.Users["user1"]; !ok {
+		t.Error("user1 should be in snapshot despite starred repos error")
+	}
+
+	if !strings.Contains(stdout.String(), "Warning") {
+		t.Errorf("expected warning in output, got: %s", stdout.String())
+	}
+}
+
+func TestLoadPreviousSnapshot_Empty(t *testing.T) {
+	store := &mockStore{snapshots: []*storage.Snapshot{}}
+
+	snapshot, err := loadPreviousSnapshot(store)
+	if err != nil {
+		t.Fatalf("loadPreviousSnapshot failed: %v", err)
+	}
+
+	if len(snapshot.Users) != 0 {
+		t.Errorf("expected empty users map, got %d users", len(snapshot.Users))
+	}
+}
+
+func TestRun_NotificationError_DoesNotFail(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{{Login: "testuser"}},
+		starredRepos: map[string][]github.Repository{
+			"testuser": {{Name: "repo", Owner: github.User{Login: "owner"}}},
+		},
+	}
+
+	mockStoreInst := &mockStore{snapshots: []*storage.Snapshot{}}
+	mockNotifierInst := &mockNotifier{sendErr: errors.New("notification failed")}
+	mockGenInst := &mockReportGenerator{}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient { return mockClient },
+		StoreFactory:        func(dbPath string) (Store, error) { return mockStoreInst, nil },
+		NotifierFactory:     func() Notifier { return mockNotifierInst },
+		ReportGenerator:     func() (ReportGenerator, error) { return mockGenInst, nil },
+		OpenBrowser:         func(url string) error { return nil },
+		Now:                 fixedTime,
+	}
+
+	result := run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-db", filepath.Join(tmpDir, "test.db"),
+		"-report", filepath.Join(tmpDir, "report.html"),
+		"-no-open",
+	}, deps)
+
+	// Should still succeed even if notification fails
+	if result != 0 {
+		t.Errorf("expected exit code 0 despite notification error, got %d", result)
+	}
+
+	if !strings.Contains(stderr.String(), "could not send notification") {
+		t.Errorf("expected warning about notification, got: %s", stderr.String())
+	}
+}
+
+func TestRun_BrowserError_DoesNotFail(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tmpDir := t.TempDir()
+
+	mockClient := &mockGitHubClient{
+		followedUsers: []github.User{{Login: "testuser"}},
+		starredRepos: map[string][]github.Repository{
+			"testuser": {{Name: "repo", Owner: github.User{Login: "owner"}}},
+		},
+	}
+
+	mockStoreInst := &mockStore{snapshots: []*storage.Snapshot{}}
+	mockGenInst := &mockReportGenerator{}
+
+	deps := &Dependencies{
+		GitHubClientFactory: func(token string) GitHubClient { return mockClient },
+		StoreFactory:        func(dbPath string) (Store, error) { return mockStoreInst, nil },
+		NotifierFactory:     func() Notifier { return &mockNotifier{} },
+		ReportGenerator:     func() (ReportGenerator, error) { return mockGenInst, nil },
+		OpenBrowser:         func(url string) error { return errors.New("browser failed") },
+		Now:                 fixedTime,
+	}
+
+	result := run(&stdout, &stderr, []string{
+		"-token", "test-token",
+		"-db", filepath.Join(tmpDir, "test.db"),
+		"-report", filepath.Join(tmpDir, "report.html"),
+		"-no-notify",
+	}, deps)
+
+	// Should still succeed even if browser fails
+	if result != 0 {
+		t.Errorf("expected exit code 0 despite browser error, got %d", result)
+	}
+
+	if !strings.Contains(stderr.String(), "could not open browser") {
+		t.Errorf("expected warning about browser, got: %s", stderr.String())
 	}
 }

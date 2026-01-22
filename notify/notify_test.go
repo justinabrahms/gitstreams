@@ -10,9 +10,9 @@ import (
 //
 //nolint:govet // field alignment not critical for test struct
 type mockExecutor struct {
+	runError        error
 	lookPathResults map[string]error
 	runCalls        []runCall
-	runError        error
 }
 
 type runCall struct {
