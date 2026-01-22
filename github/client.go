@@ -21,31 +21,29 @@ const rateLimitWarningThreshold = 100
 
 // cacheEntry stores a cached API response with its ETag.
 type cacheEntry struct {
+	timestamp time.Time
 	etag      string
 	data      []byte
-	timestamp time.Time
 }
 
 // RateLimit contains GitHub API rate limit information.
 type RateLimit struct {
+	Reset     time.Time
 	Limit     int
 	Remaining int
-	Reset     time.Time
 	Used      int
 }
 
 // Client is a GitHub API client.
 type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	token      string
-	logger     *slog.Logger
-
-	cacheMu sync.RWMutex
-	cache   map[string]*cacheEntry
-
-	rateLimitMu sync.RWMutex
+	httpClient  *http.Client
+	logger      *slog.Logger
+	cache       map[string]*cacheEntry
 	rateLimit   *RateLimit
+	baseURL     string
+	token       string
+	cacheMu     sync.RWMutex
+	rateLimitMu sync.RWMutex
 }
 
 // User represents a GitHub user.
@@ -188,8 +186,8 @@ func (c *Client) get(ctx context.Context, path string, result any) error {
 			"etag", cached.etag,
 		)
 		if result != nil {
-			if err := json.Unmarshal(cached.data, result); err != nil {
-				return fmt.Errorf("decoding cached response: %w", err)
+			if unmarshalErr := json.Unmarshal(cached.data, result); unmarshalErr != nil {
+				return fmt.Errorf("decoding cached response: %w", unmarshalErr)
 			}
 		}
 		return nil
