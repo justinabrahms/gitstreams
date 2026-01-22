@@ -69,6 +69,45 @@ The generated report includes:
 - **Relative timestamps** — "2 hours ago", "yesterday", "last week"
 - **Fun taglines** — dynamic header message based on activity volume
 
+## Development
+
+### Git Hooks (Recommended)
+
+This project uses [lefthook](https://github.com/evilmartians/lefthook) for Git hooks to catch lint errors before they're pushed.
+
+**Install lefthook:**
+
+```bash
+# macOS
+brew install lefthook
+
+# Go
+go install github.com/evilmartians/lefthook@latest
+
+# Or see: https://github.com/evilmartians/lefthook#installation
+```
+
+**Enable hooks:**
+
+```bash
+lefthook install
+```
+
+The hooks will:
+- **Pre-commit**: Run fast checks (gofmt, goimports, go vet)
+- **Pre-push**: Run full CI suite (golangci-lint, tests, build, mod tidy)
+
+**Dependencies:**
+
+```bash
+# Install goimports (for import formatting)
+go install golang.org/x/tools/cmd/goimports@latest
+
+# Install golangci-lint (for comprehensive linting)
+# See: https://golangci-lint.run/welcome/install/
+brew install golangci-lint
+```
+
 ## Requirements
 
 - Go 1.22+

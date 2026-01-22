@@ -1,0 +1,69 @@
+# Lefthook configuration for gitstreams
+# Install: https://github.com/evilmartians/lefthook#installation
+# Run: lefthook install
+
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      run: |
+        unformatted=$(gofmt -l {staged_files})
+        if [ -n "$unformatted" ]; then
+          echo "Files not formatted:"
+          echo "$unformatted"
+          echo ""
+          echo "Run: gofmt -w ."
+          exit 1
+        fi
+
+    goimports:
+      glob: "*.go"
+      run: |
+        if ! command -v goimports &> /dev/null; then
+          echo "goimports not found. Install: go install golang.org/x/tools/cmd/goimports@latest"
+          exit 1
+        fi
+        unformatted=$(goimports -l {staged_files})
+        if [ -n "$unformatted" ]; then
+          echo "Files with incorrect imports:"
+          echo "$unformatted"
+          echo ""
+          echo "Run: goimports -w ."
+          exit 1
+        fi
+
+    govet:
+      glob: "*.go"
+      run: go vet ./...
+
+pre-push:
+  parallel: false
+  commands:
+    mod-tidy:
+      run: |
+        go mod tidy
+        if ! git diff --exit-code go.mod; then
+          echo "go.mod is not tidy. Run: go mod tidy"
+          exit 1
+        fi
+        if [ -f go.sum ]; then
+          if ! git diff --exit-code go.sum; then
+            echo "go.sum is not tidy. Run: go mod tidy"
+            exit 1
+          fi
+        fi
+
+    build:
+      run: go build -v ./...
+
+    test:
+      run: go test -race ./...
+
+    golangci-lint:
+      run: |
+        if ! command -v golangci-lint &> /dev/null; then
+          echo "golangci-lint not found. Install: https://golangci-lint.run/welcome/install/"
+          exit 1
+        fi
+        golangci-lint run
