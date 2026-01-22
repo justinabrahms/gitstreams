@@ -451,6 +451,7 @@ func TestRateLimitHeaderParsing(t *testing.T) {
 	rl := c.GetRateLimit()
 	if rl == nil {
 		t.Fatal("expected rate limit after request")
+		return
 	}
 
 	if rl.Limit != 5000 {
