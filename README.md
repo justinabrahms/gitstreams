@@ -1,5 +1,8 @@
 # gitstreams
 
+[![CI](https://github.com/justinabrahms/gitstreams/actions/workflows/ci.yml/badge.svg)](https://github.com/justinabrahms/gitstreams/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/justinabrahms/gitstreams/graph/badge.svg)](https://codecov.io/gh/justinabrahms/gitstreams)
+
 Track what your GitHub social network has been up to. Get desktop notifications
 and a rich HTML report showing repos starred, new projects, and activity from
 developers you follow.
